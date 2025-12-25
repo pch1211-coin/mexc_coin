@@ -2,75 +2,78 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>MEXC DASH Web</title>
-  <style>
-    body{margin:0;padding:16px;background:#0b1220;color:#e8f0ff;font-family:system-ui}
-    h1{margin:0 0 12px}
-    .bar{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px}
-    .box{background:#111a2e;border:1px solid #1f2c4a;border-radius:12px;padding:10px}
-    label{font-size:12px;opacity:.8;display:block;margin-bottom:6px}
-    input,select,button{background:#0b1220;color:#fff;border:1px solid #263a63;border-radius:10px;padding:8px}
-    button{cursor:pointer}
-    .grid{
-      display:grid;
-      grid-template-columns: repeat(6, minmax(0, 1fr));
-      gap:10px;
-    }
-    /* PC: 12개 한 화면 목표 -> 12열 */
-    @media (min-width: 1100px){
-      .grid{ grid-template-columns: repeat(12, minmax(0, 1fr)); }
-    }
-    .card{background:#111a2e;border:1px solid #1f2c4a;border-radius:14px;padding:10px;min-height:210px}
-    .title{font-weight:800;margin:0 0 6px;font-size:14px}
-    .row{display:flex;justify-content:space-between;gap:8px;margin:4px 0;font-size:12px}
-    .big{font-size:16px;font-weight:800}
-    .pill{display:inline-block;padding:3px 8px;border-radius:999px;font-size:11px;margin-right:6px}
-    .trendUp{background:#ff4d4d;color:#fff}   /* 상승=빨강 */
-    .trendDown{background:#4d79ff;color:#fff} /* 하락=파랑 */
-    .trendNeutral{background:#444;color:#fff}
-    .warn{background:#ffcc66;color:#000}
-    .hit{background:#ff5a5a;color:#fff}
-    .ok{background:#59d38a;color:#000}
-    .pnlPlus{color:#ff4d4d;font-weight:800}  /* 수익=빨강 */
-    .pnlMinus{color:#4d79ff;font-weight:800} /* 손실=파랑 */
-    .muted{opacity:.75}
-    .small{font-size:11px;opacity:.75}
-  </style>
+  <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
-  <h1>📊 MEXC DASH Web</h1>
+  <div class="container">
+    <header class="header">
+      <div class="title">
+        <span class="rocket">🚀</span>
+        <h1>MEXC DASH Web</h1>
+      </div>
+      <div class="sub">
+        <span id="modeText">모드: PC</span>
+        <span class="dot">•</span>
+        <span id="ma30Timer">MA30: -</span>
+      </div>
+    </header>
 
-  <div class="bar">
-    <div class="box">
-      <label>와치리스트 심볼 선택</label>
-      <select id="wlSelect"></select>
-    </div>
+    <section class="panel">
+      <div class="panel-row">
+        <div class="box">
+          <label>와치리스트 심볼 선택</label>
+          <div class="row">
+            <select id="watchSelect"></select>
+            <button id="btnAddCard" class="btn">카드에 추가</button>
+            <button id="btnRemoveCard" class="btn ghost">카드 제거</button>
+          </div>
+          <div class="hint">* 모바일 최대 6개 / PC 최대 12개</div>
+        </div>
 
-    <div class="box">
-      <label>카드에 추가(최대: 모바일 6 / PC 12)</label>
-      <button id="btnAdd">추가</button>
-      <button id="btnRemove">제거</button>
-    </div>
+        <div class="box">
+          <label>와치리스트에 심볼 추가 (BTCUSDT 또는 BTC_USDT)</label>
+          <div class="row">
+            <input id="watchAddInput" placeholder="예: COREUSDT" />
+            <button id="btnAddWatch" class="btn">와치리스트 추가</button>
+          </div>
+          <div class="hint">* 추가한 심볼은 브라우저에 저장됩니다(localStorage).</div>
+        </div>
 
-    <div class="box">
-      <label>와치리스트에 심볼 추가(BTCUSDT 또는 BTC_USDT)</label>
-      <input id="wlInput" placeholder="예: COREUSDT" />
-      <button id="wlAdd">와치리스트 추가</button>
-    </div>
+        <div class="box">
+          <label>와치리스트에서 선택 심볼 삭제</label>
+          <div class="row">
+            <button id="btnRemoveWatch" class="btn danger">와치리스트 삭제</button>
+          </div>
+          <div class="hint">* 삭제하면 드롭다운에서도 사라집니다.</div>
+        </div>
 
-    <div class="box">
-      <label>와치리스트에서 선택 심볼 삭제</label>
-      <button id="wlDel">와치리스트 삭제</button>
-    </div>
+        <div class="box">
+          <label>현재가 기준</label>
+          <div class="row">
+            <select id="priceBasis">
+              <option value="fair" selected>Fair Price (권장, PnL/ROI 더 잘 맞음)</option>
+              <option value="last">Last Price</option>
+              <option value="index">Index Price</option>
+            </select>
+            <button id="btnStart" class="btn primary">실시간 갱신 시작</button>
+            <button id="btnStop" class="btn ghost">정지</button>
+          </div>
+          <div class="hint">* 5초마다 가격 갱신 / MA30은 5분 캐시</div>
+        </div>
+      </div>
+    </section>
 
-    <div class="box">
-      <label>MA30 마지막 갱신 시간</label>
-      <div id="ma30Time" class="small">-</div>
-    </div>
+    <main>
+      <div id="grid" class="grid"></div>
+    </main>
+
+    <footer class="footer">
+      <div>모바일 링크는 <b>PC 링크와 동일</b>합니다. (반응형이라 자동으로 모바일 UI로 바뀜)</div>
+      <div class="small">예상마진(PnL): 수익(빨간색) / 손실(파란색)</div>
+    </footer>
   </div>
-
-  <div id="grid" class="grid"></div>
 
   <script src="./app.js"></script>
 </body>
