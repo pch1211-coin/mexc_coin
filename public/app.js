@@ -1,541 +1,403 @@
-// ====== Settings (Dash 방식 유지) ======
-const TREND_BAND_PCT = 0.3;  // MA30 ±0.3% 밴드
-const DEFAULTS = {
-  margin: 5.8,
-  lev: 20,
-  entry: 0,
-  side: "SHORT",
-  tpPct: 1.5,
-  slPct: 0.7,
-  nearPct: 0.2
-};
+// ====== Config ======
+const TREND_BAND_PCT = 0.3;
+const REFRESH_MS = 3000;       // 현재가 갱신 주기(서버 캐시 2초)
+const MA30_TTL_NOTE = "MA30는 서버에서 5분 캐시";
 
-const STORAGE = {
-  watch: "mexc_watchlist_v1",
-  cards: "mexc_cards_v1",
-  cardCfg: (sym) => `mexc_cardcfg_${sym}`
-};
+const DEFAULT_WATCHLIST = [
+  "BTCUSDT","ETHUSDT","COREUSDT","WLDUSDT","PIUSDT","DOGEUSDT","XRPUSDT","TRXUSDT"
+];
 
-// ====== Basic helpers ======
-const $ = (id) => document.getElementById(id);
+const LEV_OPTIONS = [1,3,5,10,15,20,25,30,35,40,45,50];
 
-function toContractSymbol(sym){
-  const s = String(sym||"").trim().toUpperCase();
+// 슬롯 개수: 모바일 6 / PC 12 (반응형이라 슬롯은 12 고정 렌더, 모바일은 스크롤 없이 6개가 ‘한 화면’ 목표)
+const SLOT_COUNT = 12;
+
+// ====== Storage ======
+function loadJSON(key, fallback) {
+  try { return JSON.parse(localStorage.getItem(key) || ""); } catch { return fallback; }
+}
+function saveJSON(key, val) { localStorage.setItem(key, JSON.stringify(val)); }
+
+function normSymForUI(s) {
+  return String(s || "").trim().toUpperCase();
+}
+
+// MEXC 선물 심볼로 변환(표시도 통일)
+function toContractSym(sym) {
+  const s = normSymForUI(sym);
   if (!s) return "";
   if (s.includes("_")) return s;
   if (s.endsWith("USDT")) return s.replace(/USDT$/, "_USDT");
   return s;
 }
-function toUiSymbol(sym){
-  // 카드 표시는 BTCUSDT 형태로 보기 편하게 (원하면 그대로도 OK)
-  const s = String(sym||"").trim().toUpperCase();
-  return s.includes("_") ? s.replace("_","") : s;
-}
-function num(v){
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
-}
-function clampMin(n, m){ return n < m ? m : n; }
-function fmt(n, d=4){
-  if (!Number.isFinite(n)) return "-";
-  // 큰 값은 소수 줄이기
-  if (Math.abs(n) >= 1000) return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
-  return n.toLocaleString(undefined, { maximumFractionDigits: d });
+
+// ====== State ======
+let watchlist = loadJSON("wl", null);
+if (!Array.isArray(watchlist) || watchlist.length === 0) {
+  watchlist = DEFAULT_WATCHLIST.map(normSymForUI);
+  saveJSON("wl", watchlist);
 }
 
-// ====== Watchlist ======
-function loadWatchlist(){
-  const raw = localStorage.getItem(STORAGE.watch);
-  if (raw){
-    try{
-      const arr = JSON.parse(raw);
-      if (Array.isArray(arr) && arr.length) return arr.map(toContractSymbol);
-    }catch{}
-  }
-  // 기본값
-  const init = ["BTC_USDT","ETH_USDT","CORE_USDT","WLD_USDT","PI_USDT","DOGE_USDT"];
-  localStorage.setItem(STORAGE.watch, JSON.stringify(init));
-  return init;
+// 슬롯별 선택된 심볼
+let slots = loadJSON("slots", null);
+if (!Array.isArray(slots) || slots.length !== SLOT_COUNT) {
+  // 기본 배치: 와치리스트 앞에서 12개 채우기(모자라면 반복)
+  slots = Array.from({ length: SLOT_COUNT }, (_, i) => watchlist[i % watchlist.length]);
+  saveJSON("slots", slots);
 }
-function saveWatchlist(list){
-  localStorage.setItem(STORAGE.watch, JSON.stringify(list));
+
+// 심볼별 입력값(=DASH 입력칸들)
+let inputsMap = loadJSON("inputsMap", {});
+function ensureInputs(sym) {
+  const s = normSymForUI(sym);
+  inputsMap[s] ||= {
+    margin: 5.8,      // 투자금(USDT) = Margin
+    leverage: 20,     // 레버리지
+    entry: 0,         // 진입가
+    side: "SHORT",    // LONG/SHORT
+    tp_pct: 1.5,      // 목표수익(%)
+    sl_pct: 0.7,      // 손절(%)
+    near_pct: 0.5     // 근접기준(%)
+  };
+  return inputsMap[s];
 }
-function renderWatchSelect(list){
-  const sel = $("watchSelect");
-  sel.innerHTML = "";
-  list.forEach(s=>{
-    const opt = document.createElement("option");
-    opt.value = s;
-    opt.textContent = s;
-    sel.appendChild(opt);
+function saveAll() {
+  saveJSON("wl", watchlist);
+  saveJSON("slots", slots);
+  saveJSON("inputsMap", inputsMap);
+}
+
+// ====== Calculations (DASH 방식 유지) ======
+function calcTrend(price, ma30, prevTrend) {
+  if (!price || !ma30) return "NONE";
+  const upper = ma30 * (1 + TREND_BAND_PCT / 100);
+  const lower = ma30 * (1 - TREND_BAND_PCT / 100);
+  if (price <= upper && price >= lower) return prevTrend || "NEUTRAL";
+  if (price > upper) return "UP";
+  if (price < lower) return "DOWN";
+  return prevTrend || "NEUTRAL";
+}
+
+function validateTpSl(tp, sl) {
+  if (!isFinite(tp) || !isFinite(sl)) return { ok: false, msg: "TP/SL 값 오류" };
+  if (tp <= 0 || sl <= 0) return { ok: false, msg: "TP/SL은 0보다 커야 함" };
+  if (tp > 50 || sl > 50) return { ok: false, msg: "TP/SL%가 너무 큼(>50%)" };
+  const warn = tp < sl * 1.3;
+  return { ok: true, warn, msg: warn ? "권장: 목표수익 ≥ 손절×1.3" : "" };
+}
+
+function fmt(n, d=6) {
+  const x = Number(n);
+  if (!isFinite(x)) return "-";
+  if (Math.abs(x) >= 1000) return x.toFixed(2);
+  return x.toFixed(d).replace(/0+$/,"").replace(/\.$/,"");
+}
+
+// ====== UI ======
+const grid = document.getElementById("grid");
+const syncInfo = document.getElementById("syncInfo");
+
+// drawer
+const drawer = document.getElementById("drawer");
+const btnWatch = document.getElementById("btnWatch");
+const btnClose = document.getElementById("btnClose");
+const backdrop = document.getElementById("backdrop");
+const wlInput = document.getElementById("wlInput");
+const wlAdd = document.getElementById("wlAdd");
+const wlList = document.getElementById("wlList");
+const btnReset = document.getElementById("btnReset");
+
+btnWatch.onclick = () => { drawer.classList.add("open"); renderWatchlist(); };
+btnClose.onclick = () => drawer.classList.remove("open");
+backdrop.onclick = () => drawer.classList.remove("open");
+
+wlAdd.onclick = () => {
+  const v = normSymForUI(wlInput.value);
+  if (!v) return;
+  if (!watchlist.includes(v)) watchlist.unshift(v);
+  wlInput.value = "";
+  saveAll();
+  renderAll(); // 드롭다운 옵션 갱신
+  renderWatchlist();
+};
+
+btnReset.onclick = () => {
+  // 슬롯을 와치리스트 기준으로 다시 자동 배치
+  slots = Array.from({ length: SLOT_COUNT }, (_, i) => watchlist[i % watchlist.length]);
+  saveAll();
+  renderAll();
+};
+
+function renderWatchlist() {
+  wlList.innerHTML = "";
+  watchlist.forEach((sym, idx) => {
+    const row = document.createElement("div");
+    row.className = "item";
+    row.innerHTML = `<code>${sym}</code><button class="xbtn">삭제</button>`;
+    row.querySelector("button").onclick = () => {
+      watchlist = watchlist.filter(s => s !== sym);
+      if (watchlist.length === 0) watchlist = DEFAULT_WATCHLIST.slice();
+      // 슬롯에서 지워진 심볼은 첫번째로 치환
+      slots = slots.map(s => (s === sym ? watchlist[0] : s));
+      saveAll();
+      renderAll();
+      renderWatchlist();
+    };
+    wlList.appendChild(row);
   });
 }
 
-// ====== Cards ======
-function maxCards(){
-  return window.matchMedia("(max-width: 820px)").matches ? 6 : 12;
-}
-function loadCards(){
-  const raw = localStorage.getItem(STORAGE.cards);
-  if (!raw) return [];
-  try{
-    const arr = JSON.parse(raw);
-    return Array.isArray(arr) ? arr.map(toContractSymbol) : [];
-  }catch{
-    return [];
-  }
-}
-function saveCards(cards){
-  localStorage.setItem(STORAGE.cards, JSON.stringify(cards));
-}
+function renderCard(slotIndex) {
+  const sym = normSymForUI(slots[slotIndex]);
+  const inp = ensureInputs(sym);
 
-function loadCardCfg(sym){
-  const raw = localStorage.getItem(STORAGE.cardCfg(sym));
-  if (!raw) return { ...DEFAULTS };
-  try{
-    const cfg = JSON.parse(raw);
-    return { ...DEFAULTS, ...cfg };
-  }catch{
-    return { ...DEFAULTS };
-  }
-}
-function saveCardCfg(sym, cfg){
-  localStorage.setItem(STORAGE.cardCfg(sym), JSON.stringify(cfg));
-}
+  const card = document.createElement("div");
+  card.className = "card";
+  card.id = `card_${slotIndex}`;
 
-// ====== API calls (our server) ======
-async function apiTicker(sym){
-  const r = await fetch(`/api/ticker?symbol=${encodeURIComponent(sym)}`);
-  const j = await r.json();
-  if (!j.ok) throw new Error(j.error || "ticker fail");
-  return j;
-}
-async function apiMA30(sym){
-  const r = await fetch(`/api/ma30?symbol=${encodeURIComponent(sym)}`);
-  const j = await r.json();
-  if (!j.ok) throw new Error(j.error || "ma30 fail");
-  return j;
-}
+  // 드롭다운 옵션
+  const options = watchlist.map(s => {
+    const sel = (s === sym) ? "selected" : "";
+    return `<option value="${s}" ${sel}>${s}</option>`;
+  }).join("");
 
-// ====== Trend / TP SL / PnL ROI (Dash 방식 동일) ======
-function calcTP_SL(entry, tpPct, slPct){
-  const longTP  = entry * (1 + tpPct/100);
-  const longSL  = entry * (1 - slPct/100);
-  const shortTP = entry * (1 - tpPct/100);
-  const shortSL = entry * (1 + slPct/100);
-  return { longTP, longSL, shortTP, shortSL };
-}
-function calcTrend(price, ma30){
-  if (!price || !ma30) return { key:"NONE", text:"-", cls:"neu" };
-  const upper = ma30 * (1 + TREND_BAND_PCT/100);
-  const lower = ma30 * (1 - TREND_BAND_PCT/100);
-  if (price > upper) return { key:"UP", text:"상승", cls:"up" };
-  if (price < lower) return { key:"DOWN", text:"하락", cls:"down" };
-  return { key:"NEUTRAL", text:"중립", cls:"neu" };
-}
-function calcPnlRoi({side, entry, price, margin, lev}){
-  const m = num(margin);
-  const L = clampMin(num(lev), 1);
-  const size = m * L; // ✅ Dash 구조 유지: Size = Margin * Leverage
-  if (!entry || !price || !m) return { size, pnl: 0, roi: 0 };
+  const levOpts = LEV_OPTIONS.map(v => {
+    const sel = Number(inp.leverage) === v ? "selected" : "";
+    return `<option value="${v}" ${sel}>${v}x</option>`;
+  }).join("");
 
-  const frac = (side === "SHORT")
-    ? ((entry - price) / entry)
-    : ((price - entry) / entry);
+  card.innerHTML = `
+    <div class="row">
+      <div class="title">슬롯 ${slotIndex+1}</div>
+      <span class="pill neutral" id="trend_${slotIndex}">트렌드: -</span>
+    </div>
 
-  const pnl = size * frac;     // ✅ Unrealized PnL(USDT)
-  const roi = (pnl / m) * 100; // ✅ ROI(%)
-  return { size, pnl, roi };
-}
-function validateTpSl(tpPct, slPct){
-  if (!Number.isFinite(tpPct) || !Number.isFinite(slPct)) return { ok:false, msg:"TP/SL 값 오류" };
-  if (tpPct <= 0 || slPct <= 0) return { ok:false, msg:"TP/SL은 0보다 커야 함" };
-  if (tpPct > 50 || slPct > 50) return { ok:false, msg:"TP/SL%가 너무 큼(>50%)" };
-  if (tpPct < slPct*1.3) return { ok:true, warn:true, msg:"권장: 목표수익 ≥ 손절×1.3" };
-  return { ok:true, warn:false, msg:"" };
-}
-function recommendByTrend(trendKey){
-  if (trendKey === "UP") return { text:"LONG 진입 추천", cls:"ok" };
-  if (trendKey === "DOWN") return { text:"SHORT 진입 추천", cls:"ok" };
-  if (trendKey === "NEUTRAL") return { text:"대기", cls:"wait" };
-  return { text:"-", cls:"wait" };
-}
+    <label>심볼 (와치리스트 드롭다운)</label>
+    <select id="sym_${slotIndex}">${options}</select>
 
-// ====== UI: card template ======
-function cardHTML(sym){
-  const uiSym = sym; // BTC_USDT 형태로 보여줌(원하면 toUiSymbol(sym))
-  return `
-    <div class="card" data-sym="${sym}">
-      <div class="cardHead">
-        <div class="sym">${uiSym}</div>
-        <div class="cardTopBtns">
-          <span class="badge neu" data-role="trendBadge">트렌드: -</span>
-          <button class="xbtn" data-role="removeOne">삭제</button>
-        </div>
+    <div class="big" id="price_${slotIndex}">현재가(Fair): -</div>
+    <div class="muted" id="ma30_${slotIndex}">MA30: -</div>
+
+    <label>투자금(USDT)=마진(Margin)</label>
+    <input id="margin_${slotIndex}" type="number" step="0.01" value="${inp.margin}"/>
+
+    <label>레버리지</label>
+    <select id="lev_${slotIndex}">${levOpts}</select>
+
+    <label>진입가(직접입력)</label>
+    <input id="entry_${slotIndex}" type="number" step="0.000001" value="${inp.entry}"/>
+
+    <label>방향(LONG/SHORT)</label>
+    <select id="side_${slotIndex}">
+      <option value="LONG" ${inp.side==="LONG"?"selected":""}>LONG</option>
+      <option value="SHORT" ${inp.side==="SHORT"?"selected":""}>SHORT</option>
+    </select>
+
+    <div class="row" style="margin-top:8px;gap:8px">
+      <div style="flex:1">
+        <label>목표수익(%)</label>
+        <input id="tp_${slotIndex}" type="number" step="0.1" value="${inp.tp_pct}"/>
       </div>
-
-      <div class="form">
-        <div class="field">
-          <label>투자금(USDT) = Margin</label>
-          <input data-role="margin" inputmode="decimal" />
-        </div>
-        <div class="field">
-          <label>레버리지</label>
-          <select data-role="lev">
-            ${[1,2,3,5,10,20,30,50,75,100,125,150].map(x=>`<option value="${x}">${x}x</option>`).join("")}
-          </select>
-        </div>
-
-        <div class="field full">
-          <label>진입가 (Entry / Avg Price)</label>
-          <input data-role="entry" inputmode="decimal" />
-        </div>
-
-        <div class="field">
-          <label>방향</label>
-          <select data-role="side">
-            <option value="LONG">LONG</option>
-            <option value="SHORT" selected>SHORT</option>
-          </select>
-        </div>
-        <div class="field">
-          <label>목표수익(%)</label>
-          <input data-role="tpPct" inputmode="decimal" />
-        </div>
-
-        <div class="field">
-          <label>손절(%)</label>
-          <input data-role="slPct" inputmode="decimal" />
-        </div>
-        <div class="field">
-          <label>근접기준(%)</label>
-          <input data-role="nearPct" inputmode="decimal" />
-        </div>
+      <div style="flex:1">
+        <label>손절(%)</label>
+        <input id="sl_${slotIndex}" type="number" step="0.1" value="${inp.sl_pct}"/>
       </div>
+    </div>
 
-      <div class="kv"><span class="k">현재가</span><span class="v" data-role="price">-</span></div>
-      <div class="kv"><span class="k">MA30</span><span class="v" data-role="ma30">-</span></div>
+    <label>근접기준(%)</label>
+    <input id="near_${slotIndex}" type="number" step="0.1" value="${inp.near_pct}"/>
 
-      <div class="kv"><span class="k">Long TP / SL</span><span class="v" data-role="longTpsl">-</span></div>
-      <div class="kv"><span class="k">Short TP / SL</span><span class="v" data-role="shortTpsl">-</span></div>
+    <div style="margin-top:10px" class="row">
+      <span class="pill neutral" id="status_${slotIndex}">상태: -</span>
+      <span class="pill neutral" id="reco_${slotIndex}">추천: -</span>
+    </div>
 
-      <div class="kv"><span class="k">Size(USDT)</span><span class="v" data-role="size">-</span></div>
-      <div class="kv"><span class="k">예상마진(USDT) (PnL)</span><span class="v" data-role="pnl">-</span></div>
-      <div class="kv"><span class="k">ROI(%)</span><span class="v" data-role="roi">-</span></div>
+    <div style="margin-top:10px">
+      <div>Long TP: <b id="ltp_${slotIndex}">-</b> / Long SL: <b id="lsl_${slotIndex}">-</b></div>
+      <div>Short TP: <b id="stp_${slotIndex}">-</b> / Short SL: <b id="ssl_${slotIndex}">-</b></div>
+    </div>
 
-      <div class="kv"><span class="k">상태</span><span class="v" data-role="status">-</span></div>
-
-      <div class="footerReco wait" data-role="reco">추천: -</div>
-      <div class="small" data-role="updated">업데이트: -</div>
+    <div style="margin-top:10px">
+      <div>예상마진(PnL USDT): <b id="pnl_${slotIndex}">-</b></div>
+      <div>ROI(%): <b id="roi_${slotIndex}">-</b></div>
+      <div class="muted" id="meta_${slotIndex}">—</div>
     </div>
   `;
-}
 
-function bindCardEvents(cardEl){
-  const sym = cardEl.dataset.sym;
-  const cfg = loadCardCfg(sym);
-
-  // set defaults
-  cardEl.querySelector('[data-role="margin"]').value = cfg.margin;
-  cardEl.querySelector('[data-role="lev"]').value = cfg.lev;
-  cardEl.querySelector('[data-role="entry"]').value = cfg.entry;
-  cardEl.querySelector('[data-role="side"]').value = cfg.side;
-  cardEl.querySelector('[data-role="tpPct"]').value = cfg.tpPct;
-  cardEl.querySelector('[data-role="slPct"]').value = cfg.slPct;
-  cardEl.querySelector('[data-role="nearPct"]').value = cfg.nearPct;
-
-  // inputs -> save
-  const saveNow = () => {
-    const ncfg = {
-      margin: num(cardEl.querySelector('[data-role="margin"]').value),
-      lev: clampMin(num(cardEl.querySelector('[data-role="lev"]').value), 1),
-      entry: num(cardEl.querySelector('[data-role="entry"]').value),
-      side: String(cardEl.querySelector('[data-role="side"]').value || "SHORT").toUpperCase(),
-      tpPct: num(cardEl.querySelector('[data-role="tpPct"]').value) || DEFAULTS.tpPct,
-      slPct: num(cardEl.querySelector('[data-role="slPct"]').value) || DEFAULTS.slPct,
-      nearPct: num(cardEl.querySelector('[data-role="nearPct"]').value) || DEFAULTS.nearPct
-    };
-    saveCardCfg(sym, ncfg);
+  // handlers
+  card.querySelector(`#sym_${slotIndex}`).onchange = (e) => {
+    slots[slotIndex] = normSymForUI(e.target.value);
+    saveAll();
+    renderAll(); // 심볼 바뀌면 카드 전체 리렌더(입력맵/표시 매칭)
   };
 
-  ["margin","lev","entry","side","tpPct","slPct","nearPct"].forEach(role=>{
-    cardEl.querySelector(`[data-role="${role}"]`).addEventListener("change", saveNow);
-    cardEl.querySelector(`[data-role="${role}"]`).addEventListener("input", () => {
-      // 입력 중에도 계산 반영(저장은 change에서)
-      renderCardOnce(sym, cardEl, lastMarket.get(sym));
-    });
-  });
+  const bindNum = (id, key) => {
+    card.querySelector(id).onchange = (e) => {
+      const s = ensureInputs(sym);
+      s[key] = Number(e.target.value);
+      inputsMap[sym] = s;
+      saveAll();
+    };
+  };
+  const bindStr = (id, key) => {
+    card.querySelector(id).onchange = (e) => {
+      const s = ensureInputs(sym);
+      s[key] = String(e.target.value).toUpperCase();
+      inputsMap[sym] = s;
+      saveAll();
+    };
+  };
 
-  cardEl.querySelector('[data-role="removeOne"]').addEventListener("click", ()=>{
-    removeCard(sym);
-  });
+  bindNum(`#margin_${slotIndex}`, "margin");
+  bindNum(`#entry_${slotIndex}`, "entry");
+  bindNum(`#tp_${slotIndex}`, "tp_pct");
+  bindNum(`#sl_${slotIndex}`, "sl_pct");
+  bindNum(`#near_${slotIndex}`, "near_pct");
+
+  card.querySelector(`#lev_${slotIndex}`).onchange = (e) => {
+    const s = ensureInputs(sym);
+    s.leverage = Number(e.target.value);
+    inputsMap[sym] = s;
+    saveAll();
+  };
+  bindStr(`#side_${slotIndex}`, "side");
+
+  return card;
 }
 
-// ====== Render / Update ======
-const lastMarket = new Map(); // sym -> {price, ma30, updatedAt, priceType, tickerRaw, maRaw}
-
-function renderCards(){
-  const grid = $("grid");
-  const cards = loadCards();
-
+function renderAll() {
   grid.innerHTML = "";
-  cards.forEach(sym=>{
-    grid.insertAdjacentHTML("beforeend", cardHTML(sym));
-  });
-
-  [...grid.querySelectorAll(".card")].forEach(bindCardEvents);
-}
-
-function addCard(sym){
-  sym = toContractSymbol(sym);
-  if (!sym) return;
-
-  const cards = loadCards();
-  const limit = maxCards();
-  if (cards.includes(sym)) return;
-  if (cards.length >= limit){
-    alert(`카드는 최대 ${limit}개까지 가능합니다. (화면 크기 기준)`);
-    return;
+  for (let i = 0; i < SLOT_COUNT; i++) {
+    grid.appendChild(renderCard(i));
   }
-  cards.push(sym);
-  saveCards(cards);
-  renderCards();
 }
+renderAll();
 
-function removeCard(sym){
-  const cards = loadCards().filter(s => s !== sym);
-  saveCards(cards);
-  renderCards();
-}
+// ====== Live refresh ======
+async function refresh() {
+  try {
+    const uniqSyms = [...new Set(slots.map(normSymForUI).filter(Boolean))];
+    const qs = new URLSearchParams({ symbols: uniqSyms.join(",") });
+    const res = await fetch(`/api/quote_batch?${qs.toString()}`);
+    const json = await res.json();
+    if (!res.ok) throw new Error(json?.error || "API error");
 
-function removeAllCards(){
-  saveCards([]);
-  renderCards();
-}
+    const map = new Map();
+    (json.results || []).forEach(r => map.set(normSymForUI(r.symbol), r));
 
-function setPnlColor(el, pnl){
-  el.classList.remove("good","bad");
-  if (pnl > 0) el.classList.add("good");     // ✅ 수익 빨강
-  else if (pnl < 0) el.classList.add("bad"); // ✅ 손실 파랑
-}
+    // 화면 업데이트
+    const now = new Date();
+    syncInfo.textContent = `갱신: ${now.toLocaleTimeString()} / ${MA30_TTL_NOTE}`;
 
-function renderCardOnce(sym, cardEl, market){
-  const cfg = loadCardCfg(sym);
-  const priceType = $("priceMode").value; // fair/last/index
+    for (let i = 0; i < SLOT_COUNT; i++) {
+      const symUI = normSymForUI(slots[i]);
+      const symC = toContractSym(symUI);
+      const q = map.get(symC) || map.get(symUI) || null;
 
-  const price = market?.price ?? 0;
-  const ma30 = market?.ma30 ?? 0;
+      const inp = ensureInputs(symUI);
+      const margin = Number(inp.margin) || 0;
+      const lev = Math.max(1, Number(inp.leverage) || 1);
+      const entry = Number(inp.entry) || 0;
+      const side = String(inp.side || "LONG").toUpperCase();
+      const tpPct = Number(inp.tp_pct) || 1.5;
+      const slPct = Number(inp.sl_pct) || 0.7;
+      const nearPct = Number(inp.near_pct) || 0.5;
 
-  // trend
-  const tr = calcTrend(price, ma30);
-  const badge = cardEl.querySelector('[data-role="trendBadge"]');
-  badge.className = `badge ${tr.cls}`;
-  badge.textContent = `트렌드: ${tr.text}`;
+      const priceEl = document.getElementById(`price_${i}`);
+      const maEl = document.getElementById(`ma30_${i}`);
+      const trendEl = document.getElementById(`trend_${i}`);
+      const statusEl = document.getElementById(`status_${i}`);
+      const recoEl = document.getElementById(`reco_${i}`);
+      const metaEl = document.getElementById(`meta_${i}`);
 
-  // TP/SL
-  const tpPct = num(cardEl.querySelector('[data-role="tpPct"]').value) || cfg.tpPct;
-  const slPct = num(cardEl.querySelector('[data-role="slPct"]').value) || cfg.slPct;
-  const entry = num(cardEl.querySelector('[data-role="entry"]').value) || cfg.entry;
-  const nearPct = num(cardEl.querySelector('[data-role="nearPct"]').value) || cfg.nearPct;
-  const side = String(cardEl.querySelector('[data-role="side"]').value || cfg.side).toUpperCase();
-
-  const chk = validateTpSl(tpPct, slPct);
-  const tpsl = calcTP_SL(entry, tpPct, slPct);
-
-  cardEl.querySelector('[data-role="price"]').textContent = price ? `${fmt(price, 6)} (${priceType})` : "-";
-  cardEl.querySelector('[data-role="ma30"]').textContent = ma30 ? fmt(ma30, 6) : "-";
-
-  cardEl.querySelector('[data-role="longTpsl"]').textContent =
-    entry ? `${fmt(tpsl.longTP, 6)} / ${fmt(tpsl.longSL, 6)}` : "-";
-  cardEl.querySelector('[data-role="shortTpsl"]').textContent =
-    entry ? `${fmt(tpsl.shortTP, 6)} / ${fmt(tpsl.shortSL, 6)}` : "-";
-
-  // PnL/ROI (Dash 방식)
-  const margin = num(cardEl.querySelector('[data-role="margin"]').value) || cfg.margin;
-  const lev = clampMin(num(cardEl.querySelector('[data-role="lev"]').value) || cfg.lev, 1);
-
-  const { size, pnl, roi } = calcPnlRoi({ side, entry, price, margin, lev });
-
-  cardEl.querySelector('[data-role="size"]').textContent = size ? fmt(size, 2) : "-";
-
-  const pnlEl = cardEl.querySelector('[data-role="pnl"]');
-  pnlEl.textContent = entry && price ? fmt(pnl, 6) : "-";
-  setPnlColor(pnlEl, pnl);
-
-  const roiEl = cardEl.querySelector('[data-role="roi"]');
-  roiEl.textContent = entry && price ? fmt(roi, 4) : "-";
-  roiEl.classList.remove("good","bad");
-  if (roi > 0) roiEl.classList.add("good");
-  else if (roi < 0) roiEl.classList.add("bad");
-
-  // Status (근접/터치)
-  let status = "-";
-  if (entry && price && chk.ok){
-    const tp = (side === "SHORT") ? tpsl.shortTP : tpsl.longTP;
-    const sl = (side === "SHORT") ? tpsl.shortSL : tpsl.longSL;
-
-    const nearTP = Math.abs(price - tp) / price * 100 <= nearPct;
-    const nearSL = Math.abs(price - sl) / price * 100 <= nearPct;
-
-    const hitTP = (side === "LONG") ? (price >= tp) : (price <= tp);
-    const hitSL = (side === "LONG") ? (price <= sl) : (price >= sl);
-
-    if (hitSL) status = `${side} SL 터치/돌파`;
-    else if (hitTP) status = `${side} TP 터치/돌파`;
-    else if (nearSL) status = `${side} SL 근접`;
-    else if (nearTP) status = `${side} TP 근접`;
-    else status = "-";
-  } else if (!chk.ok){
-    status = `설정 오류: ${chk.msg}`;
-  }
-  const statusEl = cardEl.querySelector('[data-role="status"]');
-  statusEl.textContent = status;
-  statusEl.classList.remove("warn");
-  if (!chk.ok) statusEl.classList.add("warn");
-
-  // recommend
-  let reco = recommendByTrend(tr.key);
-  // trend 반대면 비추천
-  if ((tr.key === "UP" && side === "SHORT") || (tr.key === "DOWN" && side === "LONG")){
-    reco = { text:"비추천(트렌드 반대)", cls:"warn" };
-  }
-  if (chk.ok && chk.warn){
-    reco = { text: `${reco.text} / ⚠ ${chk.msg}`, cls:"warn" };
-  }
-  if (!chk.ok){
-    reco = { text: `설정 오류: ${chk.msg}`, cls:"warn" };
-  }
-  const recoEl = cardEl.querySelector('[data-role="reco"]');
-  recoEl.className = `footerReco ${reco.cls}`;
-  recoEl.textContent = `추천: ${reco.text}`;
-
-  // updated
-  const up = cardEl.querySelector('[data-role="updated"]');
-  const ts = market?.updatedAt ? new Date(market.updatedAt) : null;
-  up.textContent = ts ? `업데이트: ${ts.toLocaleTimeString()}` : `업데이트: -`;
-}
-
-// ====== Polling ======
-let timer = null;
-
-async function tickOnce(){
-  const cards = loadCards();
-  const priceType = $("priceMode").value;
-
-  for (const sym of cards){
-    try{
-      const [t, m] = await Promise.all([
-        apiTicker(sym),
-        apiMA30(sym)
-      ]);
-
-      const price = (priceType === "last") ? t.last :
-                    (priceType === "index") ? t.index : t.fair;
-
-      lastMarket.set(sym, {
-        price: num(price),
-        ma30: num(m.ma30),
-        updatedAt: Date.now(),
-        priceType
-      });
-
-      const cardEl = document.querySelector(`.card[data-sym="${sym}"]`);
-      if (cardEl) renderCardOnce(sym, cardEl, lastMarket.get(sym));
-    } catch (e){
-      const cardEl = document.querySelector(`.card[data-sym="${sym}"]`);
-      if (cardEl){
-        cardEl.querySelector('[data-role="status"]').textContent = `데이터 오류: ${String(e.message||e)}`;
-        cardEl.querySelector('[data-role="status"]').classList.add("warn");
+      if (!q || q.error) {
+        priceEl.textContent = `현재가(Fair): -`;
+        maEl.textContent = `MA30: -`;
+        trendEl.className = "pill neutral";
+        trendEl.textContent = "트렌드: -";
+        statusEl.className = "pill neutral";
+        statusEl.textContent = "상태: -";
+        recoEl.className = "pill warn";
+        recoEl.textContent = `추천: 오류`;
+        metaEl.textContent = q?.error ? `에러: ${q.error}` : "데이터 없음";
+        continue;
       }
+
+      const price = Number(q.fair);
+      const ma30 = Number(q.ma30);
+
+      priceEl.textContent = `현재가(Fair): ${fmt(price, 6)}`;
+      maEl.textContent = `MA30: ${fmt(ma30, 6)}`;
+
+      // Trend
+      const t = calcTrend(price, ma30, null);
+      trendEl.className = `pill ${t==="UP"?"up":t==="DOWN"?"down":"neutral"}`;
+      trendEl.textContent = `트렌드: ${t==="UP"?"상승":t==="DOWN"?"하락":"중립"}`;
+
+      // Recommend (트렌드 방향일 때만 추천)
+      let reco = "대기";
+      if (t === "UP") reco = "LONG 진입 추천";
+      if (t === "DOWN") reco = "SHORT 진입 추천";
+      if ((t === "UP" && side === "SHORT") || (t === "DOWN" && side === "LONG")) reco = "비추천(트렌드 반대)";
+      const chk = validateTpSl(tpPct, slPct);
+      if (!chk.ok) reco = "설정 오류: " + chk.msg;
+      else if (chk.warn) reco = `${reco} / ⚠ ${chk.msg}`;
+
+      recoEl.className = `pill ${reco.includes("오류")?"hit":reco.includes("⚠")?"warn":reco.includes("추천")?"ok":"neutral"}`;
+      recoEl.textContent = `추천: ${reco}`;
+
+      // TP/SL
+      const longTP = entry ? entry * (1 + tpPct/100) : null;
+      const longSL = entry ? entry * (1 - slPct/100) : null;
+      const shortTP = entry ? entry * (1 - tpPct/100) : null;
+      const shortSL = entry ? entry * (1 + slPct/100) : null;
+
+      document.getElementById(`ltp_${i}`).textContent = entry ? fmt(longTP, 6) : "-";
+      document.getElementById(`lsl_${i}`).textContent = entry ? fmt(longSL, 6) : "-";
+      document.getElementById(`stp_${i}`).textContent = entry ? fmt(shortTP, 6) : "-";
+      document.getElementById(`ssl_${i}`).textContent = entry ? fmt(shortSL, 6) : "-";
+
+      // Status (근접/터치)
+      let status = "";
+      if (entry && chk.ok) {
+        const tp = (side==="SHORT") ? shortTP : longTP;
+        const sl = (side==="SHORT") ? shortSL : longSL;
+
+        const nearTP = Math.abs(price - tp) / price * 100 <= nearPct;
+        const nearSL = Math.abs(price - sl) / price * 100 <= nearPct;
+
+        let hitTP=false, hitSL=false;
+        if (side === "LONG") { hitTP = price >= tp; hitSL = price <= sl; }
+        else { hitTP = price <= tp; hitSL = price >= sl; }
+
+        if (hitSL) status = `${side} SL 터치/돌파`;
+        else if (hitTP) status = `${side} TP 터치/돌파`;
+        else if (nearSL) status = `${side} SL 근접`;
+        else if (nearTP) status = `${side} TP 근접`;
+      }
+
+      statusEl.className = `pill ${status.includes("터치")?"hit":status.includes("근접")?"warn":"neutral"}`;
+      statusEl.textContent = `상태: ${status || "-"}`;
+
+      // PnL/ROI (전 방식 유지: Size=Margin*Lev, ROI=PnL/Margin)
+      let pnl = null, roi = null;
+      if (entry && margin > 0) {
+        const size = margin * lev;
+        const frac = (side === "SHORT") ? ((entry - price)/entry) : ((price - entry)/entry);
+        pnl = size * frac;
+        roi = (pnl / margin) * 100;
+      }
+
+      document.getElementById(`pnl_${i}`).textContent = pnl===null ? "-" : fmt(pnl, 6);
+      document.getElementById(`roi_${i}`).textContent = roi===null ? "-" : fmt(roi, 4);
+
+      metaEl.textContent =
+        `심볼: ${symC} / 레버리지: ${lev}x / Size=마진×레버리지 / price_ts=${new Date(q.price_ts).toLocaleTimeString()}`;
     }
+  } catch (e) {
+    syncInfo.textContent = `갱신 오류: ${String(e?.message || e)}`;
   }
 }
 
-function start(){
-  if (timer) return;
-  $("btnStart").disabled = true;
-  $("btnStop").disabled = false;
-  tickOnce();
-  timer = setInterval(tickOnce, 5000);
-}
-function stop(){
-  if (!timer) return;
-  clearInterval(timer);
-  timer = null;
-  $("btnStart").disabled = false;
-  $("btnStop").disabled = true;
-}
-
-// ====== Boot ======
-function boot(){
-  // watchlist
-  let watch = loadWatchlist();
-  renderWatchSelect(watch);
-
-  // cards
-  const cards = loadCards();
-  if (!cards.length){
-    // 처음엔 선택된 심볼 1개만 카드로
-    addCard(watch[0]);
-  }else{
-    renderCards();
-  }
-
-  // buttons
-  $("btnAddWatch").addEventListener("click", ()=>{
-    let sym = toContractSymbol($("watchInput").value);
-    if (!sym) return;
-    let list = loadWatchlist();
-    if (!list.includes(sym)){
-      list.push(sym);
-      saveWatchlist(list);
-      renderWatchSelect(list);
-    }
-    $("watchInput").value = "";
-  });
-
-  $("btnDelWatch").addEventListener("click", ()=>{
-    const sel = $("watchSelect").value;
-    if (!sel) return;
-    let list = loadWatchlist().filter(s=>s!==sel);
-    if (!list.length){
-      alert("와치리스트는 최소 1개는 남겨야 합니다.");
-      return;
-    }
-    saveWatchlist(list);
-    renderWatchSelect(list);
-    // 카드에서도 제거
-    const cards = loadCards().filter(s=>s!==sel);
-    saveCards(cards);
-    renderCards();
-  });
-
-  $("btnAddCard").addEventListener("click", ()=>{
-    const sel = $("watchSelect").value;
-    addCard(sel);
-  });
-
-  $("btnRemoveAll").addEventListener("click", ()=>{
-    if (confirm("카드를 모두 제거할까요?")) removeAllCards();
-  });
-
-  $("btnStart").addEventListener("click", start);
-  $("btnStop").addEventListener("click", stop);
-
-  $("priceMode").addEventListener("change", ()=>{
-    // 모드 바꾸면 즉시 한번 반영
-    tickOnce();
-  });
-
-  // 화면 크기 바뀌면 카드 제한만 안내 (자동 제거는 안 함)
-  window.addEventListener("resize", ()=>{
-    const limit = maxCards();
-    const cur = loadCards().length;
-    if (cur > limit){
-      // 사용자 데이터를 지우진 않고 알림만
-      console.log(`현재 카드 ${cur}개, 이 화면 기준 권장 최대 ${limit}개`);
-    }
-  });
-}
-
-boot();
+refresh();
+setInterval(refresh, REFRESH_MS);
