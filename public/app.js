@@ -386,4 +386,327 @@ function bindCardInputs(cardEl, idx) {
 }
 
 // ---- API calls ----
-async function apiTicker
+async function apiTicker(symbol) {
+  const sym = normalizeSymbolForAPI(symbol);
+  const r = await fetch(`/api/ticker?symbol=${encodeURIComponent(sym)}`);
+  const j = await r.json();
+  if (!j.ok) throw new Error(j.error || "ticker fail");
+  return j;
+}
+async function apiMa30(symbol) {
+  const sym = normalizeSymbolForAPI(symbol);
+  const r = await fetch(`/api/ma30?symbol=${encodeURIComponent(sym)}`);
+  const j = await r.json();
+  if (!j.ok) throw new Error(j.error || "ma30 fail");
+  return j;
+}
+
+// ---- card refresh logic ----
+const runtime = {
+  // per card
+  lastTrend: {},  // symbol -> "UP/DOWN/NEUTRAL"
+  price: {},      // symbol -> number
+  ma30: {},       // symbol -> number
+  lastUpdated: {} // symbol -> time string
+};
+
+function pickPriceByBasis(ticker) {
+  const basis = priceBasis.value; // fair/last/index
+  if (basis === "last") return ticker.last;
+  if (basis === "index") return ticker.index ?? ticker.fair ?? ticker.last;
+  return ticker.fair ?? ticker.last;
+}
+
+function fmt(n, digits=6) {
+  if (!Number.isFinite(n)) return "-";
+  // 큰 값은 소수 줄이기
+  const abs = Math.abs(n);
+  if (abs >= 1000) return n.toFixed(2);
+  if (abs >= 1) return n.toFixed(4);
+  return n.toFixed(digits);
+}
+
+async function refreshOneCard(idx) {
+  const c = cards[idx];
+  if (!c) return;
+
+  const symbolUI = normalizeSymbolForUI(c.symbol);
+  const cardEl = grid.querySelector(`.card[data-idx="${idx}"]`);
+  if (!cardEl) return;
+
+  const priceEl = cardEl.querySelector(`[data-role="price"]`);
+  const ma30El = cardEl.querySelector(`[data-role="ma30"]`);
+  const longTPSLEl = cardEl.querySelector(`[data-role="longTPSL"]`);
+  const shortTPSLEl = cardEl.querySelector(`[data-role="shortTPSL"]`);
+  const sizeEl = cardEl.querySelector(`[data-role="size"]`);
+  const pnlEl = cardEl.querySelector(`[data-role="pnl"]`);
+  const roiEl = cardEl.querySelector(`[data-role="roi"]`);
+  const recoEl = cardEl.querySelector(`[data-role="reco"]`);
+  const updatedEl = cardEl.querySelector(`[data-role="updated"]`);
+
+  const trendBadge = cardEl.querySelector(`[data-role="trendBadge"]`);
+  const statusBadge = cardEl.querySelector(`[data-role="statusBadge"]`);
+
+  // TP/SL 계산(입력만으로 가능)
+  const tpSl = computeTP_SL(c.entry, c.tp, c.sl);
+  longTPSLEl.textContent = `${fmt(tpSl.longTP)} / ${fmt(tpSl.longSL)}`;
+  shortTPSLEl.textContent = `${fmt(tpSl.shortTP)} / ${fmt(tpSl.shortSL)}`;
+
+  // TP/SL 유효성 경고
+  const chk = validateTpSl(c.tp, c.sl);
+  const recoBase = { text:"", warn:false };
+  // 트렌드가 아직 없으면 "추천:-" 유지
+
+  // price / ma30 없으면 캐시값으로라도 표시
+  const price = runtime.price[symbolUI];
+  const ma30 = runtime.ma30[symbolUI];
+
+  if (Number.isFinite(price)) priceEl.textContent = fmt(price);
+  if (Number.isFinite(ma30)) ma30El.textContent = fmt(ma30);
+
+  // trend
+  const prevTrend = runtime.lastTrend[symbolUI] || "NEUTRAL";
+  const t = calcTrend(price, ma30, prevTrend);
+  runtime.lastTrend[symbolUI] = t.key;
+
+  trendBadge.classList.remove("up","down","neutral");
+  if (t.key === "UP") trendBadge.classList.add("up");
+  else if (t.key === "DOWN") trendBadge.classList.add("down");
+  else trendBadge.classList.add("neutral");
+  trendBadge.textContent = `트렌드: ${t.text || "-"}`;
+
+  // recommend
+  const r = calcRecommend(t.key, c.side);
+  let recoText = r.text ? `추천: ${r.text}` : "추천: -";
+  let warn = r.warn;
+
+  if (!chk.ok) {
+    recoText = `설정 오류: ${chk.msg}`;
+    warn = true;
+  } else if (chk.warn) {
+    recoText = `${recoText} / ⚠ ${chk.msg}`;
+    warn = true;
+  }
+
+  recoEl.textContent = recoText;
+  recoEl.classList.toggle("warn", !!warn);
+
+  // PnL/ROI
+  const pr = calcPnLRoi({
+    side: c.side,
+    entry: c.entry,
+    price: price,
+    margin: c.margin,
+    lev: c.leverage
+  });
+
+  sizeEl.textContent = pr.ok ? fmt(pr.size, 2) : "-";
+
+  // PnL 색상(수익 빨강 / 손실 파랑)
+  pnlEl.classList.remove("good","bad");
+  roiEl.classList.remove("good","bad");
+
+  if (pr.ok) {
+    pnlEl.textContent = fmt(pr.pnl, 8);
+    roiEl.textContent = fmt(pr.roi, 6);
+
+    if (pr.pnl >= 0) {
+      pnlEl.classList.add("good");
+      roiEl.classList.add("good");
+    } else {
+      pnlEl.classList.add("bad");
+      roiEl.classList.add("bad");
+    }
+  } else {
+    pnlEl.textContent = "-";
+    roiEl.textContent = "-";
+  }
+
+  // status (근접/터치)
+  const TP = (String(c.side).toUpperCase() === "SHORT") ? tpSl.shortTP : tpSl.longTP;
+  const SL = (String(c.side).toUpperCase() === "SHORT") ? tpSl.shortSL : tpSl.longSL;
+
+  const st = calcStatus({
+    side: c.side,
+    price,
+    tp: TP,
+    sl: SL,
+    nearPct: c.near
+  });
+
+  statusBadge.textContent = `상태: ${st.text || "-"}`;
+
+  // 업데이트 시간
+  const u = runtime.lastUpdated[symbolUI];
+  updatedEl.textContent = `업데이트: ${u || "-"}`;
+}
+
+async function refreshAllPrices() {
+  // 병렬 요청 수를 카드수로 제한 (너무 많은 호출 방지)
+  const tasks = cards.map(async (c, idx) => {
+    const symbolUI = normalizeSymbolForUI(c.symbol);
+    try {
+      const t = await apiTicker(c.symbol);
+      const p = pickPriceByBasis(t);
+      if (Number.isFinite(p)) {
+        runtime.price[symbolUI] = p;
+        runtime.lastUpdated[symbolUI] = nowStr();
+      }
+    } catch (e) {
+      // 가격 실패해도 기존 값 유지
+    }
+    // 가격 업데이트 후 카드 계산
+    await refreshOneCard(idx);
+  });
+
+  await Promise.allSettled(tasks);
+}
+
+async function refreshMA30IfNeeded() {
+  const now = Date.now();
+  // 5분마다 한 번씩만 전체 MA30을 갱신(서버 캐시로도 보호)
+  if (now - lastMa30PullAt < MA30_REFRESH_MS) return;
+
+  lastMa30PullAt = now;
+
+  const tasks = cards.map(async (c, idx) => {
+    const symbolUI = normalizeSymbolForUI(c.symbol);
+    try {
+      const r = await apiMa30(c.symbol);
+      if (Number.isFinite(r.ma30)) {
+        runtime.ma30[symbolUI] = r.ma30;
+      }
+    } catch (e) {
+      // MA30 실패해도 유지
+    }
+    await refreshOneCard(idx);
+  });
+
+  await Promise.allSettled(tasks);
+  updateMa30TimerLabel();
+}
+
+function updateMa30TimerLabel() {
+  if (!lastMa30PullAt) {
+    ma30Timer.textContent = "MA30: 대기";
+    return;
+  }
+  const remain = Math.max(0, MA30_REFRESH_MS - (Date.now() - lastMa30PullAt));
+  const mm = Math.floor(remain / 60000);
+  const ss = Math.floor((remain % 60000) / 1000);
+  ma30Timer.textContent = `MA30: 다음 갱신까지 ${mm}분 ${ss}초`;
+}
+
+// ---- controls ----
+function addWatchSymbol(symRaw) {
+  const sym = normalizeSymbolForUI(symRaw);
+  if (!sym) return alert("심볼을 입력하세요.");
+  if (watchlist.includes(sym)) return alert("이미 와치리스트에 있습니다.");
+
+  watchlist.push(sym);
+  saveLS(LS_WATCH, watchlist);
+  renderWatchSelect();
+  watchSelect.value = sym;
+}
+
+function removeWatchSelected() {
+  const sym = watchSelect.value;
+  if (!sym) return;
+
+  // cards에도 있으면 같이 제거(혼란 방지)
+  cards = cards.filter(c => normalizeSymbolForUI(c.symbol) !== sym);
+  watchlist = watchlist.filter(x => x !== sym);
+
+  saveLS(LS_WATCH, watchlist);
+  saveLS(LS_CARDS, cards);
+
+  renderWatchSelect();
+  renderCards();
+}
+
+function addCardFromSelected() {
+  const sym = watchSelect.value;
+  if (!sym) return;
+
+  const m = maxCards();
+  if (cards.length >= m) {
+    return alert(`현재 모드 최대 카드 수(${m})를 초과할 수 없어요.`);
+  }
+
+  if (cards.some(c => normalizeSymbolForUI(c.symbol) === sym)) {
+    return alert("이미 카드에 추가된 심볼입니다.");
+  }
+
+  cards.push({
+    symbol: sym,
+    side: "SHORT",
+    entry: 0,
+    margin: 5.8,
+    leverage: 20,
+    tp: DEFAULT_TP,
+    sl: DEFAULT_SL,
+    near: DEFAULT_NEAR
+  });
+
+  saveLS(LS_CARDS, cards);
+  renderCards();
+}
+
+function removeCardFromSelected() {
+  const sym = watchSelect.value;
+  if (!sym) return;
+
+  cards = cards.filter(c => normalizeSymbolForUI(c.symbol) !== sym);
+  saveLS(LS_CARDS, cards);
+  renderCards();
+}
+
+function start() {
+  if (running) return;
+  running = true;
+
+  // 즉시 한번 실행
+  refreshMA30IfNeeded();
+  refreshAllPrices();
+
+  priceTimer = setInterval(() => {
+    refreshAllPrices();
+    refreshMA30IfNeeded();
+  }, PRICE_REFRESH_MS);
+
+  ma30TickTimer = setInterval(updateMa30TimerLabel, 1000);
+}
+
+function stop() {
+  running = false;
+  if (priceTimer) clearInterval(priceTimer);
+  if (ma30TickTimer) clearInterval(ma30TickTimer);
+  priceTimer = null;
+  ma30TickTimer = null;
+}
+
+// ---- events ----
+btnAddWatch.addEventListener("click", () => {
+  addWatchSymbol(watchAddInput.value);
+  watchAddInput.value = "";
+});
+
+btnRemoveWatch.addEventListener("click", () => {
+  if (!confirm("와치리스트에서 선택한 심볼을 삭제할까요? (카드에서도 제거됩니다)")) return;
+  removeWatchSelected();
+});
+
+btnAddCard.addEventListener("click", () => addCardFromSelected());
+btnRemoveCard.addEventListener("click", () => removeCardFromSelected());
+
+btnStart.addEventListener("click", () => start());
+btnStop.addEventListener("click", () => stop());
+
+window.addEventListener("resize", () => {
+  setModeText();
+  renderCards();
+});
+
+window.addEventListener("DOMContentLoaded", () => {
+  ensureInit();
+});
