@@ -1,0 +1,42 @@
+:root { color-scheme: dark; }
+body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans KR", sans-serif; background:#0b1220; color:#e8eefc; }
+.wrap { max-width:1100px; margin:0 auto; padding:18px; }
+.head { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:14px; }
+.title { font-size:28px; font-weight:800; }
+.actions { display:flex; gap:10px; }
+button { background:#1b2a4a; color:#e8eefc; border:1px solid #2b3b63; padding:10px 12px; border-radius:10px; cursor:pointer; }
+button:hover { filter:brightness(1.1); }
+
+.grid { display:grid; grid-template-columns: repeat( auto-fit, minmax(280px, 1fr) ); gap:12px; }
+
+.card { background:#0f1b33; border:1px solid #1f2f52; border-radius:14px; padding:14px; }
+.cardHead { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
+.badge { font-size:12px; padding:4px 8px; border-radius:999px; border:1px solid #2b3b63; opacity:0.9; }
+.ok { color:#8ef0a0; }
+.err { color:#ff8a8a; }
+
+.field { display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
+.field .full { grid-column:1/-1; }
+label { font-size:12px; opacity:0.85; display:block; margin-bottom:6px; }
+input, select { width:100%; box-sizing:border-box; padding:10px; border-radius:10px; border:1px solid #2b3b63; background:#0b1220; color:#e8eefc; }
+hr { border:none; border-top:1px solid #1f2f52; margin:12px 0; }
+
+.kv { line-height:1.8; }
+.kv b { font-size:18px; }
+.red { color:#ff4d4d; font-weight:800; }
+.blue { color:#4d79ff; font-weight:800; }
+.yellow { color:#ffd166; font-weight:800; }
+
+.small { font-size:12px; opacity:0.85; }
+.row { display:flex; gap:10px; }
+.row input { flex:1; }
+
+.modal { position:fixed; inset:0; background:rgba(0,0,0,0.65); display:none; align-items:center; justify-content:center; padding:16px; }
+.modal[aria-hidden="false"] { display:flex; }
+.modalBox { width:min(680px, 100%); background:#0f1b33; border:1px solid #1f2f52; border-radius:16px; padding:14px; }
+.modalHead { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
+.modalTitle { font-size:18px; font-weight:800; }
+.wlList { margin-top:10px; display:flex; flex-wrap:wrap; gap:8px; }
+.wlItem { display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:999px; border:1px solid #2b3b63; background:#0b1220; }
+.wlItem button { padding:6px 8px; border-radius:10px; }
+.hint { font-size:12px; opacity:0.85; margin-top:10px; }
