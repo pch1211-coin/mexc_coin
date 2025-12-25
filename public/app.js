@@ -390,7 +390,10 @@ async function refresh() {
 
       document.getElementById(`pnl_${i}`).textContent = pnl===null ? "-" : fmt(pnl, 6);
       document.getElementById(`roi_${i}`).textContent = roi===null ? "-" : fmt(roi, 4);
-
+      // ✅ 여기 3줄 추가 (색상)
+    pnlEl.classList.toggle("pnl-pos", pnl > 0);
+    pnlEl.classList.toggle("pnl-neg", pnl < 0);
+    if (pnl === 0) pnlEl.classList.remove("pnl-pos", "pnl-neg");
       metaEl.textContent =
         `심볼: ${symC} / 레버리지: ${lev}x / Size=마진×레버리지 / price_ts=${new Date(q.price_ts).toLocaleTimeString()}`;
     }
@@ -401,4 +404,5 @@ async function refresh() {
 
 refresh();
 setInterval(refresh, REFRESH_MS);
+
 
