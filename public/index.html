@@ -2,65 +2,53 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>MEXC DASH Web</title>
-  <link rel="stylesheet" href="./styles.css" />
+  <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <div class="container">
+  <div class="wrap">
     <header class="header">
-      <div class="title">
-        <span class="rocket">🚀</span>
-        <h1>MEXC DASH Web</h1>
-      </div>
-      <div class="sub">
-        <span id="modeText">모드: PC</span>
-        <span class="dot">•</span>
-        <span id="ma30Timer">MA30: -</span>
-      </div>
+      <div class="title">🚀 MEXC DASH Web</div>
+      <div class="sub">* 가격은 5초마다 갱신 / MA30은 5분 캐시(서버)</div>
     </header>
 
     <section class="panel">
       <div class="panel-row">
-        <div class="box">
+        <div class="field">
           <label>와치리스트 심볼 선택</label>
-          <div class="row">
-            <select id="watchSelect"></select>
-            <button id="btnAddCard" class="btn">카드에 추가</button>
-            <button id="btnRemoveCard" class="btn ghost">카드 제거</button>
-          </div>
-          <div class="hint">* 모바일 최대 6개 / PC 최대 12개</div>
+          <select id="watchSelect"></select>
         </div>
 
-        <div class="box">
+        <div class="btns">
+          <button id="btnAddCard">카드에 추가(최대: 모바일 6 / PC 12)</button>
+          <button class="ghost" id="btnRemoveAll">카드 전체 제거</button>
+        </div>
+      </div>
+
+      <div class="panel-row">
+        <div class="field grow">
           <label>와치리스트에 심볼 추가 (BTCUSDT 또는 BTC_USDT)</label>
-          <div class="row">
-            <input id="watchAddInput" placeholder="예: COREUSDT" />
-            <button id="btnAddWatch" class="btn">와치리스트 추가</button>
-          </div>
-          <div class="hint">* 추가한 심볼은 브라우저에 저장됩니다(localStorage).</div>
+          <input id="watchInput" placeholder="예: COREUSDT" />
         </div>
+        <button id="btnAddWatch">와치리스트 추가</button>
 
-        <div class="box">
-          <label>와치리스트에서 선택 심볼 삭제</label>
-          <div class="row">
-            <button id="btnRemoveWatch" class="btn danger">와치리스트 삭제</button>
-          </div>
-          <div class="hint">* 삭제하면 드롭다운에서도 사라집니다.</div>
-        </div>
+        <button class="danger" id="btnDelWatch">선택 심볼 삭제</button>
+      </div>
 
-        <div class="box">
+      <div class="panel-row">
+        <div class="field">
           <label>현재가 기준</label>
-          <div class="row">
-            <select id="priceBasis">
-              <option value="fair" selected>Fair Price (권장, PnL/ROI 더 잘 맞음)</option>
-              <option value="last">Last Price</option>
-              <option value="index">Index Price</option>
-            </select>
-            <button id="btnStart" class="btn primary">실시간 갱신 시작</button>
-            <button id="btnStop" class="btn ghost">정지</button>
-          </div>
-          <div class="hint">* 5초마다 가격 갱신 / MA30은 5분 캐시</div>
+          <select id="priceMode">
+            <option value="fair" selected>Fair Price (권장, PnL/ROI 더 잘 맞음)</option>
+            <option value="last">Last Price (체결가)</option>
+            <option value="index">Index Price (지수)</option>
+          </select>
+        </div>
+
+        <div class="btns">
+          <button id="btnStart">실시간 갱신 시작</button>
+          <button class="ghost" id="btnStop" disabled>정지</button>
         </div>
       </div>
     </section>
@@ -68,13 +56,8 @@
     <main>
       <div id="grid" class="grid"></div>
     </main>
-
-    <footer class="footer">
-      <div>모바일 링크는 <b>PC 링크와 동일</b>합니다. (반응형이라 자동으로 모바일 UI로 바뀜)</div>
-      <div class="small">예상마진(PnL): 수익(빨간색) / 손실(파란색)</div>
-    </footer>
   </div>
 
-  <script src="./app.js"></script>
+  <script src="/app.js"></script>
 </body>
 </html>
