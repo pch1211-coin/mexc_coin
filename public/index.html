@@ -2,61 +2,157 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>MEXC Futures Dashboard</title>
   <style>
-    body {
-      font-family: Arial, sans-serif;
-      background: #0b1220;
-      color: #fff;
-      padding: 40px;
+    body { font-family: Arial, sans-serif; background:#0b1220; color:#fff; padding:20px; }
+    h1 { color:#00e5ff; margin:0 0 16px; }
+    .wrap { max-width:520px; }
+    .card { background:#111a2e; padding:16px; border-radius:12px; margin:12px 0; }
+    label { display:block; margin:10px 0 6px; color:#c9d4ff; font-size:14px; }
+    input, select {
+      width:100%; padding:12px; border-radius:10px; border:1px solid #2a3a66;
+      background:#0e1630; color:#fff; font-size:16px; outline:none;
     }
-    .card {
-      background: #111a2e;
-      padding: 20px;
-      border-radius: 12px;
-      max-width: 400px;
+    .row { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+    button {
+      width:100%; padding:12px; margin-top:12px; border-radius:10px; border:none;
+      background:#00e5ff; color:#00111a; font-weight:bold; font-size:16px; cursor:pointer;
     }
-    h1 {
-      color: #00e5ff;
-    }
-    .price {
-      font-size: 28px;
-      margin-top: 10px;
-    }
-    .status {
-      margin-top: 15px;
-      color: #8bc34a;
-    }
+    .kpi { font-size:18px; margin:8px 0; }
+    .muted { color:#8aa0c6; font-size:13px; }
+    .pos { color:#ff4d4d; font-weight:700; }   /* 상승=빨강 */
+    .neg { color:#4d79ff; font-weight:700; }   /* 하락=파랑 */
+    .warn { color:#ffcc66; font-weight:700; }
+    .small { font-size:13px; color:#cbd6ff; }
+    .pill { display:inline-block; padding:4px 10px; border-radius:999px; background:#0e1630; border:1px solid #2a3a66; }
   </style>
 </head>
 <body>
+  <div class="wrap">
+    <h1>🚀 MEXC Futures Dashboard</h1>
 
-  <h1>🚀 MEXC Futures Dashboard</h1>
+    <div class="card">
+      <div class="row">
+        <div>
+          <label>심볼 (MEXC 계약)</label>
+          <input id="symbol" value="BTC_USDT" placeholder="예: CORE_USDT" />
+        </div>
+        <div>
+          <label>방향 (롱/숏)</label>
+          <select id="side">
+            <option value="LONG">LONG</option>
+            <option value="SHORT">SHORT</option>
+          </select>
+        </div>
+      </div>
 
-  <div class="card">
-    <div>심볼: BTC_USDT</div>
-    <div class="price" id="price">불러오는 중...</div>
-    <div class="status" id="status">연결 중</div>
+      <label>진입가 (Entry / Avg Price)</label>
+      <input id="entry" type="number" step="0.00000001" value="87600" />
+
+      <div class="row">
+        <div>
+          <label>투자금(USDT) = Margin</label>
+          <input id="margin" type="number" step="0.0001" value="10" />
+        </div>
+        <div>
+          <label>레버리지</label>
+          <select id="leverage">
+            <option>1</option><option>5</option><option>10</option><option>15</option>
+            <option selected>20</option>
+            <option>25</option><option>30</option><option>35</option><option>40</option>
+            <option>45</option><option>50</option>
+          </select>
+        </div>
+      </div>
+
+      <label>현재가 기준</label>
+      <select id="priceType">
+        <option value="fair" selected>Fair Price (권장, PnL/ROI 더 잘 맞음)</option>
+        <option value="last">Last Price (체결가)</option>
+      </select>
+
+      <button id="btn">계산 + 실시간 갱신 시작</button>
+      <div class="muted" style="margin-top:8px;">* 5초마다 자동 갱신됩니다.</div>
+    </div>
+
+    <div class="card" id="result">
+      <div class="kpi">상태: <span class="pill" id="status">대기</span></div>
+      <div class="kpi">현재가: <span id="price">-</span> <span class="small" id="priceTag"></span></div>
+      <div class="kpi">Size(USDT) = <span id="size">-</span></div>
+      <div class="kpi">예상마진(USDT) (PnL): <span id="pnl">-</span></div>
+      <div class="kpi">ROI(%): <span id="roi">-</span></div>
+      <div class="muted" id="updated">업데이트: -</div>
+      <div class="muted" id="debug" style="margin-top:10px;"></div>
+    </div>
   </div>
 
   <script>
-    async function loadPrice() {
-      try {
-        const res = await fetch("/api/price?symbol=BTC_USDT");
-        const data = await res.json();
+    let timer = null;
 
-        document.getElementById("price").innerText =
-          "현재가: " + data.price;
-        document.getElementById("status").innerText =
-          "업데이트: " + new Date(data.timestamp).toLocaleTimeString();
+    function fmt(n) {
+      if (n === null || n === undefined || !isFinite(n)) return "-";
+      const abs = Math.abs(n);
+      if (abs >= 1000) return n.toFixed(2);
+      if (abs >= 1) return n.toFixed(6).replace(/0+$/,'').replace(/\.$/,'');
+      return n.toFixed(8).replace(/0+$/,'').replace(/\.$/,'');
+    }
+
+    async function calcOnce() {
+      const symbol = document.getElementById("symbol").value.trim();
+      const side = document.getElementById("side").value;
+      const entry = Number(document.getElementById("entry").value);
+      const margin = Number(document.getElementById("margin").value);
+      const leverage = Number(document.getElementById("leverage").value);
+      const priceType = document.getElementById("priceType").value;
+
+      const statusEl = document.getElementById("status");
+      statusEl.textContent = "불러오는 중…";
+
+      try {
+        const res = await fetch("/api/calc", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ symbol, side, entry, margin, leverage, priceType })
+        });
+
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.msg || data.error || "calc failed");
+
+        document.getElementById("price").textContent = fmt(data.price);
+        document.getElementById("priceTag").textContent = `(${data.priceType})`;
+
+        document.getElementById("size").textContent = fmt(data.sizeUsdt);
+
+        const pnlEl = document.getElementById("pnl");
+        pnlEl.textContent = fmt(data.pnlUsdt);
+
+        const roiEl = document.getElementById("roi");
+        roiEl.textContent = fmt(data.roiPct);
+
+        // 색상: 상승=빨강, 하락=파랑
+        pnlEl.className = (data.pnlUsdt >= 0) ? "pos" : "neg";
+        roiEl.className = (data.roiPct >= 0) ? "pos" : "neg";
+
+        statusEl.textContent = "정상";
+        document.getElementById("updated").textContent =
+          "업데이트: " + new Date(data.ts).toLocaleTimeString();
+
+        // 참고용(디버그)
+        document.getElementById("debug").textContent =
+          `last=${fmt(data.last)} / fair=${fmt(data.fair)}`;
+
       } catch (e) {
-        document.getElementById("status").innerText = "가격 불러오기 실패";
+        statusEl.textContent = "오류";
+        document.getElementById("debug").textContent = "에러: " + e.message;
       }
     }
 
-    loadPrice();
-    setInterval(loadPrice, 5000); // 5초마다 갱신
+    document.getElementById("btn").addEventListener("click", async () => {
+      if (timer) clearInterval(timer);
+      await calcOnce();
+      timer = setInterval(calcOnce, 5000);
+    });
   </script>
-
 </body>
 </html>
