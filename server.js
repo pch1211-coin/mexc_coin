@@ -1,133 +1,125 @@
-import express from "express";
-import path from "path";
-import { fileURLToPath } from "url";
+const express = require("express");
+const path = require("path");
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// 정적파일 제공
+app.use(express.static(path.join(__dirname, "public")));
 
-// ===== 캐시 (속도/레이트리밋 보호) =====
-const cache = new Map();
-function getCache(key) {
-  const v = cache.get(key);
-  if (!v) return null;
-  if (Date.now() > v.exp) { cache.delete(key); return null; }
-  return v.data;
-}
-function setCache(key, data, ttlMs) {
-  cache.set(key, { data, exp: Date.now() + ttlMs });
-}
+// ---- MEXC endpoints (Futures Contract) ----
+// 주의: MEXC 선물 심볼은 BTC_USDT 형태가 필요할 수 있음.
+// 사용자가 BTCUSDT를 넣으면 서버가 BTC_USDT로 변환해줌.
 
-function mexcSymbol(sym) {
+function normalizeSymbol(sym) {
   const s = String(sym || "").trim().toUpperCase();
   if (!s) return "";
   if (s.includes("_")) return s;
-  if (s.endsWith("USDT")) return s.replace(/USDT$/, "_USDT"); // BTCUSDT -> BTC_USDT
+  if (s.endsWith("USDT")) return s.replace(/USDT$/, "_USDT");
   return s;
 }
 
-async function fetchJson(url) {
-  const res = await fetch(url, { headers: { "User-Agent": "mexc-coin-dashboard" } });
+async function mexcFetchJson(url) {
+  // Node 18+ 에는 fetch 기본 내장
+  const res = await fetch(url, { headers: { "User-Agent": "mexc-dash-web" } });
   const text = await res.text();
   let json;
-  try { json = JSON.parse(text); } catch { throw new Error("JSON parse fail"); }
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  try {
+    json = JSON.parse(text);
+  } catch (e) {
+    throw new Error("MEXC JSON parse fail");
+  }
+  if (!res.ok) throw new Error(`MEXC HTTP ${res.status}`);
   return json;
 }
 
-// ticker: fairPrice 사용(구글시트 맞춤)
-async function fetchTicker(sym) {
-  const msym = mexcSymbol(sym);
-  const key = `ticker:${msym}`;
-  const cached = getCache(key);
-  if (cached) return cached;
+// ticker cache (짧게)
+const tickerCache = new Map(); // key: symbol, value: {ts, data}
+const TICKER_TTL_MS = 1500; // 1.5초
 
-  const url = `https://contract.mexc.com/api/v1/contract/ticker?symbol=${encodeURIComponent(msym)}`;
-  const json = await fetchJson(url);
-  if (!json?.success || !json.data) throw new Error("ticker fail");
+// MA30 cache (길게)
+const ma30Cache = new Map(); // key: symbol, value: {ts, ma30}
+const MA30_TTL_MS = 5 * 60 * 1000; // 5분
 
-  const last = Number(json.data.lastPrice);
-  const fair = Number(json.data.fairPrice ?? json.data.fair_price ?? last);
-  if (!Number.isFinite(fair)) throw new Error("fair invalid");
+app.get("/api/ticker", async (req, res) => {
+  try {
+    const symRaw = req.query.symbol;
+    const symbol = normalizeSymbol(symRaw);
+    if (!symbol) return res.status(400).json({ ok: false, error: "symbol required" });
 
-  const out = { symbol: msym, last, fair, ts: Date.now() };
-  setCache(key, out, 2000); // 2초 캐시
-  return out;
-}
+    const now = Date.now();
+    const cached = tickerCache.get(symbol);
+    if (cached && now - cached.ts < TICKER_TTL_MS) {
+      return res.json({ ok: true, symbol, ...cached.data, cached: true });
+    }
 
-// MA30: Day1 종가 30개 평균 (5분 캐시)
-async function fetchMA30(sym) {
-  const msym = mexcSymbol(sym);
-  const key = `ma30:${msym}`;
-  const cached = getCache(key);
-  if (cached) return cached;
+    const url = `https://contract.mexc.com/api/v1/contract/ticker?symbol=${encodeURIComponent(symbol)}`;
+    const json = await mexcFetchJson(url);
 
-  const nowSec = Math.floor(Date.now() / 1000);
-  const startSec = nowSec - 60 * 24 * 60 * 60; // 60일치 여유
-  const url = `https://contract.mexc.com/api/v1/contract/kline/${encodeURIComponent(msym)}?interval=Day1&start=${startSec}&end=${nowSec}`;
-  const json = await fetchJson(url);
-  if (!json?.success || !json.data?.close) throw new Error("kline fail");
+    if (!json || json.success !== true || !json.data) {
+      return res.status(502).json({ ok: false, error: "ticker fail", raw: json });
+    }
 
-  const closes = json.data.close.map(Number).filter(v => Number.isFinite(v));
-  if (closes.length < 30) throw new Error("not enough candles");
-  const last30 = closes.slice(-30);
-  const ma30 = last30.reduce((a, b) => a + b, 0) / 30;
+    const last = Number(json.data.lastPrice);
+    const fair = Number(json.data.fairPrice ?? json.data.fair_price ?? last);
+    const index = Number(json.data.indexPrice ?? json.data.index_price ?? NaN);
 
-  const out = { ma30, refreshedAt: Date.now() };
-  setCache(key, out, 5 * 60 * 1000); // 5분 캐시
-  return out;
-}
+    const data = {
+      last: Number.isFinite(last) ? last : null,
+      fair: Number.isFinite(fair) ? fair : null,
+      index: Number.isFinite(index) ? index : null
+    };
 
-// ===== 정적 파일 =====
-app.use(express.static(path.join(__dirname, "public")));
+    tickerCache.set(symbol, { ts: now, data });
+    res.json({ ok: true, symbol, ...data, cached: false });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
 
-// health
+app.get("/api/ma30", async (req, res) => {
+  try {
+    const symRaw = req.query.symbol;
+    const symbol = normalizeSymbol(symRaw);
+    if (!symbol) return res.status(400).json({ ok: false, error: "symbol required" });
+
+    const now = Date.now();
+    const cached = ma30Cache.get(symbol);
+    if (cached && now - cached.ts < MA30_TTL_MS) {
+      return res.json({ ok: true, symbol, ma30: cached.ma30, cached: true, ttlMs: MA30_TTL_MS });
+    }
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    const startSec = nowSec - 60 * 24 * 60 * 60; // 60일치 조회 (여유)
+
+    const url =
+      `https://contract.mexc.com/api/v1/contract/kline/${encodeURIComponent(symbol)}` +
+      `?interval=Day1&start=${startSec}&end=${nowSec}`;
+
+    const json = await mexcFetchJson(url);
+
+    if (!json || json.success !== true || !json.data || !Array.isArray(json.data.close)) {
+      return res.status(502).json({ ok: false, error: "kline fail", raw: json });
+    }
+
+    const closes = json.data.close.map(Number).filter(v => Number.isFinite(v));
+    if (closes.length < 30) {
+      return res.status(502).json({ ok: false, error: "not enough candles", length: closes.length });
+    }
+
+    const last30 = closes.slice(-30);
+    const ma30 = last30.reduce((a, b) => a + b, 0) / 30;
+
+    ma30Cache.set(symbol, { ts: now, ma30 });
+    res.json({ ok: true, symbol, ma30, cached: false, ttlMs: MA30_TTL_MS });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+// 헬스체크
 app.get("/api/health", (req, res) => res.json({ ok: true }));
 
-// 단일 심볼 데이터
-app.get("/api/market", async (req, res) => {
-  try {
-    const symbol = String(req.query.symbol || "BTCUSDT");
-    const t = await fetchTicker(symbol);
-    const m = await fetchMA30(symbol);
-    res.json({
-      symbol: mexcSymbol(symbol),
-      fair: t.fair,
-      last: t.last,
-      ma30: m.ma30,
-      ma30RefreshedAt: m.refreshedAt,
-      ts: t.ts
-    });
-  } catch (e) {
-    res.status(500).json({ error: String(e?.message || e) });
-  }
+app.listen(PORT, () => {
+  console.log(`Server running on :${PORT}`);
 });
-
-// 배치 (여러 코인 한 번에)
-app.get("/api/market_batch", async (req, res) => {
-  try {
-    const symbols = String(req.query.symbols || "BTCUSDT")
-      .split(",").map(s => s.trim()).filter(Boolean);
-
-    const results = [];
-    for (const s of symbols) {
-      const t = await fetchTicker(s);
-      const m = await fetchMA30(s);
-      results.push({
-        symbol: mexcSymbol(s),
-        fair: t.fair,
-        last: t.last,
-        ma30: m.ma30,
-        ma30RefreshedAt: m.refreshedAt,
-        ts: t.ts
-      });
-    }
-    res.json({ results });
-  } catch (e) {
-    res.status(500).json({ error: String(e?.message || e) });
-  }
-});
-
-app.listen(PORT, () => console.log("Server running on", PORT));
