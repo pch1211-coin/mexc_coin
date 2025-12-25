@@ -3,43 +3,86 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>MEXC Futures Dashboard</title>
-  <link rel="stylesheet" href="style.css" />
+  <title>MEXC Futures DASH (Web)</title>
+  <style>
+    body{margin:0;background:#0b1220;color:#e8f0ff;font-family:system-ui}
+    header{padding:14px 14px 10px;border-bottom:1px solid #1f2c4a;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    h1{font-size:18px;margin:0}
+    .btn{background:#111a2e;border:1px solid #263a63;color:#e8f0ff;border-radius:10px;padding:8px 10px;cursor:pointer}
+    .btn:active{transform:translateY(1px)}
+    .muted{opacity:.75;font-size:12px}
+    .wrap{padding:12px}
+    .grid{display:grid;gap:10px}
+    /* 모바일: 2열 x 3행 = 6개 */
+    @media (max-width: 640px){ .grid{grid-template-columns:repeat(2, minmax(0,1fr));} }
+    /* 태블릿: 3열 */
+    @media (min-width: 641px) and (max-width: 1023px){ .grid{grid-template-columns:repeat(3, minmax(0,1fr));} }
+    /* PC: 4열 x 3행 = 12개 */
+    @media (min-width: 1024px){ .grid{grid-template-columns:repeat(4, minmax(0,1fr));} }
+
+    .card{background:#111a2e;border:1px solid #1f2c4a;border-radius:14px;padding:12px}
+    .row{display:flex;justify-content:space-between;gap:10px;align-items:center}
+    .title{font-weight:800}
+    select,input{width:100%;padding:8px;border-radius:10px;border:1px solid #263a63;background:#0b1220;color:#fff}
+    label{display:block;font-size:11px;opacity:.8;margin:8px 0 4px}
+    .big{font-size:18px;font-weight:900;margin-top:10px}
+    .pill{display:inline-block;padding:4px 9px;border-radius:999px;font-size:11px}
+    .up{background:#ff4d4d;color:#fff}
+    .down{background:#4d79ff;color:#fff}
+    .neutral{background:#384156;color:#fff}
+    .warn{background:#ffd36b;color:#000}
+    .hit{background:#ff5a5a;color:#fff}
+    .ok{background:#59d38a;color:#000}
+
+    /* Watchlist drawer */
+    .drawer{position:fixed;inset:0;display:none}
+    .drawer.open{display:block}
+    .backdrop{position:absolute;inset:0;background:rgba(0,0,0,.6)}
+    .panel{position:absolute;right:0;top:0;height:100%;width:min(420px, 92vw);background:#0b1220;border-left:1px solid #263a63;padding:14px;overflow:auto}
+    .panel h2{margin:0 0 10px;font-size:16px}
+    .list{display:flex;flex-direction:column;gap:8px}
+    .item{display:flex;gap:8px;align-items:center;background:#111a2e;border:1px solid #1f2c4a;border-radius:12px;padding:8px}
+    .item code{flex:1}
+    .xbtn{background:#2b3550;border:1px solid #3c4b75;color:#fff;border-radius:10px;padding:6px 8px;cursor:pointer}
+  </style>
 </head>
 <body>
+  <header>
+    <h1>📊 MEXC 선물 DASH (웹)</h1>
+    <button class="btn" id="btnWatch">와치리스트</button>
+    <button class="btn" id="btnReset">슬롯 초기화(6/12)</button>
+    <span class="muted" id="syncInfo">—</span>
+  </header>
+
   <div class="wrap">
-    <header class="head">
-      <div class="title">🚀 MEXC Futures Dashboard</div>
-      <div class="actions">
-        <button id="btnWatchlist">Watchlist 관리</button>
-        <button id="btnAddCard">카드 추가</button>
+    <div class="grid" id="grid"></div>
+  </div>
+
+  <!-- Watchlist drawer -->
+  <div class="drawer" id="drawer">
+    <div class="backdrop" id="backdrop"></div>
+    <div class="panel">
+      <div class="row">
+        <h2>와치리스트 관리</h2>
+        <button class="btn" id="btnClose">닫기</button>
       </div>
-    </header>
 
-    <section class="grid" id="cards"></section>
+      <p class="muted">
+        심볼은 <b>BTCUSDT</b> 또는 <b>BTC_USDT</b>로 입력해도 됩니다.<br/>
+        (자동으로 선물 심볼 형식으로 변환됨)
+      </p>
 
-    <!-- Watchlist Modal -->
-    <div class="modal" id="wlModal" aria-hidden="true">
-      <div class="modalBox">
-        <div class="modalHead">
-          <div class="modalTitle">Watchlist</div>
-          <button id="btnCloseWl">닫기</button>
-        </div>
-
-        <div class="row">
-          <input id="wlInput" placeholder="예: BTC_USDT, CORE_USDT" />
-          <button id="btnAddSymbol">추가</button>
-        </div>
-
-        <div class="hint">
-          * 심볼은 <b>BTC_USDT</b> 형태 권장. (USDT만 쓰면 자동 변환)
-        </div>
-
-        <div class="wlList" id="wlList"></div>
+      <label>심볼 추가</label>
+      <div class="row">
+        <input id="wlInput" placeholder="예: COREUSDT" />
+        <button class="btn" id="wlAdd">추가</button>
       </div>
+
+      <label style="margin-top:14px">현재 와치리스트</label>
+      <div class="list" id="wlList"></div>
     </div>
   </div>
 
-  <script src="app.js"></script>
+  <script src="./app.js"></script>
 </body>
 </html>
