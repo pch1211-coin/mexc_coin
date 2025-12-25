@@ -1,1 +1,62 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>MEXC Futures Dashboard</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #0b1220;
+      color: #fff;
+      padding: 40px;
+    }
+    .card {
+      background: #111a2e;
+      padding: 20px;
+      border-radius: 12px;
+      max-width: 400px;
+    }
+    h1 {
+      color: #00e5ff;
+    }
+    .price {
+      font-size: 28px;
+      margin-top: 10px;
+    }
+    .status {
+      margin-top: 15px;
+      color: #8bc34a;
+    }
+  </style>
+</head>
+<body>
 
+  <h1>🚀 MEXC Futures Dashboard</h1>
+
+  <div class="card">
+    <div>심볼: BTC_USDT</div>
+    <div class="price" id="price">불러오는 중...</div>
+    <div class="status" id="status">연결 중</div>
+  </div>
+
+  <script>
+    async function loadPrice() {
+      try {
+        const res = await fetch("/api/price?symbol=BTC_USDT");
+        const data = await res.json();
+
+        document.getElementById("price").innerText =
+          "현재가: " + data.price;
+        document.getElementById("status").innerText =
+          "업데이트: " + new Date(data.timestamp).toLocaleTimeString();
+      } catch (e) {
+        document.getElementById("status").innerText = "가격 불러오기 실패";
+      }
+    }
+
+    loadPrice();
+    setInterval(loadPrice, 5000); // 5초마다 갱신
+  </script>
+
+</body>
+</html>
