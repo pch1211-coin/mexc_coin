@@ -1,403 +1,344 @@
-// ====== Config ======
+// ===== 구글 DASH 계산 "동일 구조" =====
 const TREND_BAND_PCT = 0.3;
-const REFRESH_MS = 3000;       // 현재가 갱신 주기(서버 캐시 2초)
-const MA30_TTL_NOTE = "MA30는 서버에서 5분 캐시";
 
 const DEFAULT_WATCHLIST = [
-  "BTCUSDT","ETHUSDT","COREUSDT","WLDUSDT","PIUSDT","DOGEUSDT","XRPUSDT","TRXUSDT"
+  "BTCUSDT","ETHUSDT","COREUSDT","WLDUSDT","PIUSDT","DOGEUSDT",
+  "XRPUSDT","TRXUSDT","SOLUSDT","BNBUSDT"
 ];
 
-const LEV_OPTIONS = [1,3,5,10,15,20,25,30,35,40,45,50];
-
-// 슬롯 개수: 모바일 6 / PC 12 (반응형이라 슬롯은 12 고정 렌더, 모바일은 스크롤 없이 6개가 ‘한 화면’ 목표)
-const SLOT_COUNT = 12;
-
-// ====== Storage ======
-function loadJSON(key, fallback) {
-  try { return JSON.parse(localStorage.getItem(key) || ""); } catch { return fallback; }
-}
-function saveJSON(key, val) { localStorage.setItem(key, JSON.stringify(val)); }
-
-function normSymForUI(s) {
-  return String(s || "").trim().toUpperCase();
+// 모바일 6 / PC 12 (같은 링크, 반응형으로 자동)
+function maxCards() {
+  return window.matchMedia("(min-width: 1100px)").matches ? 12 : 6;
 }
 
-// MEXC 선물 심볼로 변환(표시도 통일)
-function toContractSym(sym) {
-  const s = normSymForUI(sym);
+function normSym(sym){
+  const s = String(sym||"").trim().toUpperCase();
   if (!s) return "";
-  if (s.includes("_")) return s;
-  if (s.endsWith("USDT")) return s.replace(/USDT$/, "_USDT");
+  if (s.includes("_")) return s.replace("_", ""); // BTC_USDT -> BTCUSDT(표시/저장 편의)
   return s;
 }
 
-// ====== State ======
-let watchlist = loadJSON("wl", null);
-if (!Array.isArray(watchlist) || watchlist.length === 0) {
-  watchlist = DEFAULT_WATCHLIST.map(normSymForUI);
-  saveJSON("wl", watchlist);
+function saveJSON(key, obj){ localStorage.setItem(key, JSON.stringify(obj)); }
+function loadJSON(key, fallback){
+  try { return JSON.parse(localStorage.getItem(key) || "") ?? fallback; }
+  catch { return fallback; }
 }
 
-// 슬롯별 선택된 심볼
-let slots = loadJSON("slots", null);
-if (!Array.isArray(slots) || slots.length !== SLOT_COUNT) {
-  // 기본 배치: 와치리스트 앞에서 12개 채우기(모자라면 반복)
-  slots = Array.from({ length: SLOT_COUNT }, (_, i) => watchlist[i % watchlist.length]);
-  saveJSON("slots", slots);
+const WL_KEY = "mexc_wl";
+const ACTIVE_KEY = "mexc_active";
+const INPUTS_KEY = "mexc_inputs";
+
+let watchlist = loadJSON(WL_KEY, DEFAULT_WATCHLIST).map(normSym);
+let active = loadJSON(ACTIVE_KEY, watchlist.slice(0, 6)).map(normSym);
+let inputs = loadJSON(INPUTS_KEY, {}); // inputs[sym] = {margin, lev, entry, side, tp, sl, near}
+
+function ensureInputs(sym){
+  inputs[sym] ||= { margin: 5.8, lev: 20, entry: 0, side: "SHORT", tp: 1.5, sl: 0.7, near: 0.2 };
+  return inputs[sym];
 }
 
-// 심볼별 입력값(=DASH 입력칸들)
-let inputsMap = loadJSON("inputsMap", {});
-function ensureInputs(sym) {
-  const s = normSymForUI(sym);
-  inputsMap[s] ||= {
-    margin: 5.8,      // 투자금(USDT) = Margin
-    leverage: 20,     // 레버리지
-    entry: 0,         // 진입가
-    side: "SHORT",    // LONG/SHORT
-    tp_pct: 1.5,      // 목표수익(%)
-    sl_pct: 0.7,      // 손절(%)
-    near_pct: 0.5     // 근접기준(%)
-  };
-  return inputsMap[s];
-}
-function saveAll() {
-  saveJSON("wl", watchlist);
-  saveJSON("slots", slots);
-  saveJSON("inputsMap", inputsMap);
+function clampActive(){
+  const max = maxCards();
+  active = active.filter(s => !!s);
+  if (active.length > max) active = active.slice(0, max);
+  saveJSON(ACTIVE_KEY, active);
 }
 
-// ====== Calculations (DASH 방식 유지) ======
-function calcTrend(price, ma30, prevTrend) {
+window.addEventListener("resize", () => { clampActive(); render(); });
+
+const grid = document.getElementById("grid");
+const wlSelect = document.getElementById("wlSelect");
+const ma30TimeEl = document.getElementById("ma30Time");
+
+function renderWatchlist(){
+  wlSelect.innerHTML = "";
+  watchlist.forEach(s => {
+    const opt = document.createElement("option");
+    opt.value = s;
+    opt.textContent = s;
+    wlSelect.appendChild(opt);
+  });
+}
+
+function trendKey(price, ma30){
   if (!price || !ma30) return "NONE";
-  const upper = ma30 * (1 + TREND_BAND_PCT / 100);
-  const lower = ma30 * (1 - TREND_BAND_PCT / 100);
-  if (price <= upper && price >= lower) return prevTrend || "NEUTRAL";
+  const upper = ma30 * (1 + TREND_BAND_PCT/100);
+  const lower = ma30 * (1 - TREND_BAND_PCT/100);
   if (price > upper) return "UP";
   if (price < lower) return "DOWN";
-  return prevTrend || "NEUTRAL";
+  return "NEUTRAL";
 }
 
-function validateTpSl(tp, sl) {
-  if (!isFinite(tp) || !isFinite(sl)) return { ok: false, msg: "TP/SL 값 오류" };
-  if (tp <= 0 || sl <= 0) return { ok: false, msg: "TP/SL은 0보다 커야 함" };
-  if (tp > 50 || sl > 50) return { ok: false, msg: "TP/SL%가 너무 큼(>50%)" };
-  const warn = tp < sl * 1.3;
-  return { ok: true, warn, msg: warn ? "권장: 목표수익 ≥ 손절×1.3" : "" };
-}
-
-function fmt(n, d=6) {
+function fmt(n, d=6){
+  if (n === null || n === undefined) return "-";
   const x = Number(n);
-  if (!isFinite(x)) return "-";
+  if (!Number.isFinite(x)) return "-";
   if (Math.abs(x) >= 1000) return x.toFixed(2);
   return x.toFixed(d).replace(/0+$/,"").replace(/\.$/,"");
 }
 
-// ====== UI ======
-const grid = document.getElementById("grid");
-const syncInfo = document.getElementById("syncInfo");
+// DASH 동일: size = margin*lev / pnl = size*frac / roi = pnl/margin*100
+function computeDash(mkt, inp){
+  const price = Number(mkt.fair);
+  const ma30 = Number(mkt.ma30);
+  const t = trendKey(price, ma30);
 
-// drawer
-const drawer = document.getElementById("drawer");
-const btnWatch = document.getElementById("btnWatch");
-const btnClose = document.getElementById("btnClose");
-const backdrop = document.getElementById("backdrop");
-const wlInput = document.getElementById("wlInput");
-const wlAdd = document.getElementById("wlAdd");
-const wlList = document.getElementById("wlList");
-const btnReset = document.getElementById("btnReset");
+  const margin = Number(inp.margin)||0;
+  const lev = Math.max(1, Number(inp.lev)||1);
+  const entry = Number(inp.entry)||0;
+  const side = String(inp.side||"LONG").toUpperCase();
+  const tpPct = Number(inp.tp)||1.5;
+  const slPct = Number(inp.sl)||0.7;
+  const nearPct = Number(inp.near)||0.2;
 
-btnWatch.onclick = () => { drawer.classList.add("open"); renderWatchlist(); };
-btnClose.onclick = () => drawer.classList.remove("open");
-backdrop.onclick = () => drawer.classList.remove("open");
+  const size = margin * lev;
 
-wlAdd.onclick = () => {
-  const v = normSymForUI(wlInput.value);
-  if (!v) return;
-  if (!watchlist.includes(v)) watchlist.unshift(v);
-  wlInput.value = "";
-  saveAll();
-  renderAll(); // 드롭다운 옵션 갱신
+  const longTP = entry ? entry*(1+tpPct/100) : null;
+  const longSL = entry ? entry*(1-slPct/100) : null;
+  const shortTP = entry ? entry*(1-tpPct/100) : null;
+  const shortSL = entry ? entry*(1+slPct/100) : null;
+
+  let pnl=null, roi=null;
+  if (entry>0 && margin>0 && size>0 && price>0){
+    const frac = (side==="SHORT") ? ((entry - price)/entry) : ((price - entry)/entry);
+    pnl = size * frac;
+    roi = (pnl / margin) * 100;
+  }
+
+  // 상태(근접/터치) - 기존 방식 유지
+  let status = "";
+  if (entry>0 && price>0){
+    const tp = (side==="SHORT") ? shortTP : longTP;
+    const sl = (side==="SHORT") ? shortSL : longSL;
+    const nearTP = Math.abs(price - tp) / price * 100 <= nearPct;
+    const nearSL = Math.abs(price - sl) / price * 100 <= nearPct;
+    const hitTP = (side==="LONG") ? price>=tp : price<=tp;
+    const hitSL = (side==="LONG") ? price<=sl : price>=sl;
+
+    if (hitSL) status = `${side} SL 터치/돌파`;
+    else if (hitTP) status = `${side} TP 터치/돌파`;
+    else if (nearSL) status = `${side} SL 근접`;
+    else if (nearTP) status = `${side} TP 근접`;
+  }
+
+  // 추천(트렌드 방향일 때만)
+  let recommend = "대기";
+  if (t==="UP") recommend = "LONG 진입 추천";
+  else if (t==="DOWN") recommend = "SHORT 진입 추천";
+  if ((t==="UP" && side==="SHORT") || (t==="DOWN" && side==="LONG")) recommend = "비추천(트렌드 반대)";
+
+  return { price, ma30, trend:t, longTP,longSL,shortTP,shortSL, pnl, roi, status, recommend, size };
+}
+
+function render(){
   renderWatchlist();
-};
+  clampActive();
+  grid.innerHTML = "";
 
-btnReset.onclick = () => {
-  // 슬롯을 와치리스트 기준으로 다시 자동 배치
-  slots = Array.from({ length: SLOT_COUNT }, (_, i) => watchlist[i % watchlist.length]);
-  saveAll();
-  renderAll();
-};
+  active.forEach(sym => {
+    const inp = ensureInputs(sym);
 
-function renderWatchlist() {
-  wlList.innerHTML = "";
-  watchlist.forEach((sym, idx) => {
-    const row = document.createElement("div");
-    row.className = "item";
-    row.innerHTML = `<code>${sym}</code><button class="xbtn">삭제</button>`;
-    row.querySelector("button").onclick = () => {
-      watchlist = watchlist.filter(s => s !== sym);
-      if (watchlist.length === 0) watchlist = DEFAULT_WATCHLIST.slice();
-      // 슬롯에서 지워진 심볼은 첫번째로 치환
-      slots = slots.map(s => (s === sym ? watchlist[0] : s));
-      saveAll();
-      renderAll();
-      renderWatchlist();
-    };
-    wlList.appendChild(row);
+    const card = document.createElement("div");
+    card.className = "card";
+    card.dataset.sym = sym;
+
+    card.innerHTML = `
+      <div class="title">${sym}</div>
+
+      <div class="row"><span class="muted">투자금(Margin)</span>
+        <input data-k="margin" type="number" step="0.01" value="${inp.margin}" style="width:120px">
+      </div>
+
+      <div class="row"><span class="muted">레버리지</span>
+        <select data-k="lev" style="width:120px">
+          ${[1,3,5,10,15,20,25,30,35,40,45,50].map(v=>`<option value="${v}" ${Number(inp.lev)===v?"selected":""}>${v}x</option>`).join("")}
+        </select>
+      </div>
+
+      <div class="row"><span class="muted">진입가(Avg)</span>
+        <input data-k="entry" type="number" step="0.000001" value="${inp.entry}" style="width:120px">
+      </div>
+
+      <div class="row"><span class="muted">방향</span>
+        <select data-k="side" style="width:120px">
+          <option value="LONG" ${inp.side==="LONG"?"selected":""}>LONG</option>
+          <option value="SHORT" ${inp.side==="SHORT"?"selected":""}>SHORT</option>
+        </select>
+      </div>
+
+      <div class="row"><span class="muted">목표수익(%)</span>
+        <input data-k="tp" type="number" step="0.1" value="${inp.tp}" style="width:120px">
+      </div>
+
+      <div class="row"><span class="muted">손절(%)</span>
+        <input data-k="sl" type="number" step="0.1" value="${inp.sl}" style="width:120px">
+      </div>
+
+      <div class="row"><span class="muted">근접기준(%)</span>
+        <input data-k="near" type="number" step="0.1" value="${inp.near}" style="width:120px">
+      </div>
+
+      <div class="row"><span class="pill trendNeutral" id="trend_${sym}">트렌드: -</span>
+        <span class="pill" id="status_${sym}">상태: -</span>
+      </div>
+
+      <div class="row"><span class="big" id="price_${sym}">가격: -</span></div>
+      <div class="row"><span class="muted" id="ma30_${sym}">MA30: -</span></div>
+
+      <div class="row"><span class="muted">Long TP/SL</span>
+        <span class="muted" id="ltp_${sym}">-</span> / <span class="muted" id="lsl_${sym}">-</span>
+      </div>
+      <div class="row"><span class="muted">Short TP/SL</span>
+        <span class="muted" id="stp_${sym}">-</span> / <span class="muted" id="ssl_${sym}">-</span>
+      </div>
+
+      <div class="row"><span class="muted">예상마진(PnL)</span>
+        <span id="pnl_${sym}">-</span>
+      </div>
+      <div class="row"><span class="muted">ROI(%)</span>
+        <span id="roi_${sym}">-</span>
+      </div>
+
+      <div class="row"><span class="pill" id="reco_${sym}">추천: -</span></div>
+      <div class="small" id="upd_${sym}">-</div>
+    `;
+
+    // 입력 저장 이벤트
+    card.querySelectorAll("input,select").forEach(el=>{
+      el.addEventListener("change", ()=>{
+        const k = el.dataset.k;
+        const v = (el.tagName==="SELECT") ? el.value : Number(el.value);
+        const obj = ensureInputs(sym);
+        obj[k] = (k==="side") ? String(v) : v;
+        inputs[sym] = obj;
+        saveJSON(INPUTS_KEY, inputs);
+      });
+    });
+
+    grid.appendChild(card);
   });
 }
 
-function renderCard(slotIndex) {
-  const sym = normSymForUI(slots[slotIndex]);
-  const inp = ensureInputs(sym);
+async function refresh(){
+  try{
+    clampActive();
+    const symbols = active.join(",");
+    if (!symbols) return;
 
-  const card = document.createElement("div");
-  card.className = "card";
-  card.id = `card_${slotIndex}`;
-
-  // 드롭다운 옵션
-  const options = watchlist.map(s => {
-    const sel = (s === sym) ? "selected" : "";
-    return `<option value="${s}" ${sel}>${s}</option>`;
-  }).join("");
-
-  const levOpts = LEV_OPTIONS.map(v => {
-    const sel = Number(inp.leverage) === v ? "selected" : "";
-    return `<option value="${v}" ${sel}>${v}x</option>`;
-  }).join("");
-
-  card.innerHTML = `
-    <div class="row">
-      <div class="title">슬롯 ${slotIndex+1}</div>
-      <span class="pill neutral" id="trend_${slotIndex}">트렌드: -</span>
-    </div>
-
-    <label>심볼 (와치리스트 드롭다운)</label>
-    <select id="sym_${slotIndex}">${options}</select>
-
-    <div class="big" id="price_${slotIndex}">현재가(Fair): -</div>
-    <div class="muted" id="ma30_${slotIndex}">MA30: -</div>
-
-    <label>투자금(USDT)=마진(Margin)</label>
-    <input id="margin_${slotIndex}" type="number" step="0.01" value="${inp.margin}"/>
-
-    <label>레버리지</label>
-    <select id="lev_${slotIndex}">${levOpts}</select>
-
-    <label>진입가(직접입력)</label>
-    <input id="entry_${slotIndex}" type="number" step="0.000001" value="${inp.entry}"/>
-
-    <label>방향(LONG/SHORT)</label>
-    <select id="side_${slotIndex}">
-      <option value="LONG" ${inp.side==="LONG"?"selected":""}>LONG</option>
-      <option value="SHORT" ${inp.side==="SHORT"?"selected":""}>SHORT</option>
-    </select>
-
-    <div class="row" style="margin-top:8px;gap:8px">
-      <div style="flex:1">
-        <label>목표수익(%)</label>
-        <input id="tp_${slotIndex}" type="number" step="0.1" value="${inp.tp_pct}"/>
-      </div>
-      <div style="flex:1">
-        <label>손절(%)</label>
-        <input id="sl_${slotIndex}" type="number" step="0.1" value="${inp.sl_pct}"/>
-      </div>
-    </div>
-
-    <label>근접기준(%)</label>
-    <input id="near_${slotIndex}" type="number" step="0.1" value="${inp.near_pct}"/>
-
-    <div style="margin-top:10px" class="row">
-      <span class="pill neutral" id="status_${slotIndex}">상태: -</span>
-      <span class="pill neutral" id="reco_${slotIndex}">추천: -</span>
-    </div>
-
-    <div style="margin-top:10px">
-      <div>Long TP: <b id="ltp_${slotIndex}">-</b> / Long SL: <b id="lsl_${slotIndex}">-</b></div>
-      <div>Short TP: <b id="stp_${slotIndex}">-</b> / Short SL: <b id="ssl_${slotIndex}">-</b></div>
-    </div>
-
-    <div style="margin-top:10px">
-      <div>예상마진(PnL USDT): <b id="pnl_${slotIndex}">-</b></div>
-      <div>ROI(%): <b id="roi_${slotIndex}">-</b></div>
-      <div class="muted" id="meta_${slotIndex}">—</div>
-    </div>
-  `;
-
-  // handlers
-  card.querySelector(`#sym_${slotIndex}`).onchange = (e) => {
-    slots[slotIndex] = normSymForUI(e.target.value);
-    saveAll();
-    renderAll(); // 심볼 바뀌면 카드 전체 리렌더(입력맵/표시 매칭)
-  };
-
-  const bindNum = (id, key) => {
-    card.querySelector(id).onchange = (e) => {
-      const s = ensureInputs(sym);
-      s[key] = Number(e.target.value);
-      inputsMap[sym] = s;
-      saveAll();
-    };
-  };
-  const bindStr = (id, key) => {
-    card.querySelector(id).onchange = (e) => {
-      const s = ensureInputs(sym);
-      s[key] = String(e.target.value).toUpperCase();
-      inputsMap[sym] = s;
-      saveAll();
-    };
-  };
-
-  bindNum(`#margin_${slotIndex}`, "margin");
-  bindNum(`#entry_${slotIndex}`, "entry");
-  bindNum(`#tp_${slotIndex}`, "tp_pct");
-  bindNum(`#sl_${slotIndex}`, "sl_pct");
-  bindNum(`#near_${slotIndex}`, "near_pct");
-
-  card.querySelector(`#lev_${slotIndex}`).onchange = (e) => {
-    const s = ensureInputs(sym);
-    s.leverage = Number(e.target.value);
-    inputsMap[sym] = s;
-    saveAll();
-  };
-  bindStr(`#side_${slotIndex}`, "side");
-
-  return card;
-}
-
-function renderAll() {
-  grid.innerHTML = "";
-  for (let i = 0; i < SLOT_COUNT; i++) {
-    grid.appendChild(renderCard(i));
-  }
-}
-renderAll();
-
-// ====== Live refresh ======
-async function refresh() {
-  try {
-    const uniqSyms = [...new Set(slots.map(normSymForUI).filter(Boolean))];
-    const qs = new URLSearchParams({ symbols: uniqSyms.join(",") });
-    const res = await fetch(`/api/quote_batch?${qs.toString()}`);
+    const res = await fetch(`/api/market_batch?symbols=${encodeURIComponent(symbols)}`);
     const json = await res.json();
     if (!res.ok) throw new Error(json?.error || "API error");
 
-    const map = new Map();
-    (json.results || []).forEach(r => map.set(normSymForUI(r.symbol), r));
+    // MA30 갱신 시간 (가장 최신값 표시)
+    let ma30Latest = 0;
 
-    // 화면 업데이트
-    const now = new Date();
-    syncInfo.textContent = `갱신: ${now.toLocaleTimeString()} / ${MA30_TTL_NOTE}`;
+    json.results.forEach(mkt=>{
+      const sym = normSym(mkt.symbol);
+      ma30Latest = Math.max(ma30Latest, Number(mkt.ma30RefreshedAt||0));
 
-    for (let i = 0; i < SLOT_COUNT; i++) {
-      const symUI = normSymForUI(slots[i]);
-      const symC = toContractSym(symUI);
-      const q = map.get(symC) || map.get(symUI) || null;
+      const inp = ensureInputs(sym);
+      const d = computeDash(mkt, inp);
 
-      const inp = ensureInputs(symUI);
-      const margin = Number(inp.margin) || 0;
-      const lev = Math.max(1, Number(inp.leverage) || 1);
-      const entry = Number(inp.entry) || 0;
-      const side = String(inp.side || "LONG").toUpperCase();
-      const tpPct = Number(inp.tp_pct) || 1.5;
-      const slPct = Number(inp.sl_pct) || 0.7;
-      const nearPct = Number(inp.near_pct) || 0.5;
-
-      const priceEl = document.getElementById(`price_${i}`);
-      const maEl = document.getElementById(`ma30_${i}`);
-      const trendEl = document.getElementById(`trend_${i}`);
-      const statusEl = document.getElementById(`status_${i}`);
-      const recoEl = document.getElementById(`reco_${i}`);
-      const metaEl = document.getElementById(`meta_${i}`);
-
-      if (!q || q.error) {
-        priceEl.textContent = `현재가(Fair): -`;
-        maEl.textContent = `MA30: -`;
-        trendEl.className = "pill neutral";
-        trendEl.textContent = "트렌드: -";
-        statusEl.className = "pill neutral";
-        statusEl.textContent = "상태: -";
-        recoEl.className = "pill warn";
-        recoEl.textContent = `추천: 오류`;
-        metaEl.textContent = q?.error ? `에러: ${q.error}` : "데이터 없음";
-        continue;
+      // 트렌드 pill
+      const tEl = document.getElementById(`trend_${sym}`);
+      if (tEl){
+        if (d.trend==="UP"){ tEl.className="pill trendUp"; tEl.textContent="트렌드: 상승"; }
+        else if (d.trend==="DOWN"){ tEl.className="pill trendDown"; tEl.textContent="트렌드: 하락"; }
+        else { tEl.className="pill trendNeutral"; tEl.textContent="트렌드: 중립"; }
       }
 
-      const price = Number(q.fair);
-      const ma30 = Number(q.ma30);
+      // 상태 pill 색
+      const sEl = document.getElementById(`status_${sym}`);
+      if (sEl){
+        const st = d.status || "-";
+        sEl.textContent = `상태: ${st}`;
+        if (st.includes("터치")) sEl.className = "pill hit";
+        else if (st.includes("근접")) sEl.className = "pill warn";
+        else sEl.className = "pill trendNeutral";
+      }
 
-      priceEl.textContent = `현재가(Fair): ${fmt(price, 6)}`;
-      maEl.textContent = `MA30: ${fmt(ma30, 6)}`;
+      // 가격/MA30
+      const pEl = document.getElementById(`price_${sym}`);
+      if (pEl) pEl.textContent = `가격: ${fmt(d.price, 6)}`;
 
-      // Trend
-      const t = calcTrend(price, ma30, null);
-      trendEl.className = `pill ${t==="UP"?"up":t==="DOWN"?"down":"neutral"}`;
-      trendEl.textContent = `트렌드: ${t==="UP"?"상승":t==="DOWN"?"하락":"중립"}`;
-
-      // Recommend (트렌드 방향일 때만 추천)
-      let reco = "대기";
-      if (t === "UP") reco = "LONG 진입 추천";
-      if (t === "DOWN") reco = "SHORT 진입 추천";
-      if ((t === "UP" && side === "SHORT") || (t === "DOWN" && side === "LONG")) reco = "비추천(트렌드 반대)";
-      const chk = validateTpSl(tpPct, slPct);
-      if (!chk.ok) reco = "설정 오류: " + chk.msg;
-      else if (chk.warn) reco = `${reco} / ⚠ ${chk.msg}`;
-
-      recoEl.className = `pill ${reco.includes("오류")?"hit":reco.includes("⚠")?"warn":reco.includes("추천")?"ok":"neutral"}`;
-      recoEl.textContent = `추천: ${reco}`;
+      const maEl = document.getElementById(`ma30_${sym}`);
+      if (maEl) maEl.textContent = `MA30: ${fmt(d.ma30, 6)}`;
 
       // TP/SL
-      const longTP = entry ? entry * (1 + tpPct/100) : null;
-      const longSL = entry ? entry * (1 - slPct/100) : null;
-      const shortTP = entry ? entry * (1 - tpPct/100) : null;
-      const shortSL = entry ? entry * (1 + slPct/100) : null;
+      const setTxt = (id,val)=>{ const el=document.getElementById(id); if(el) el.textContent=fmt(val,6); };
+      setTxt(`ltp_${sym}`, d.longTP);
+      setTxt(`lsl_${sym}`, d.longSL);
+      setTxt(`stp_${sym}`, d.shortTP);
+      setTxt(`ssl_${sym}`, d.shortSL);
 
-      document.getElementById(`ltp_${i}`).textContent = entry ? fmt(longTP, 6) : "-";
-      document.getElementById(`lsl_${i}`).textContent = entry ? fmt(longSL, 6) : "-";
-      document.getElementById(`stp_${i}`).textContent = entry ? fmt(shortTP, 6) : "-";
-      document.getElementById(`ssl_${i}`).textContent = entry ? fmt(shortSL, 6) : "-";
-
-      // Status (근접/터치)
-      let status = "";
-      if (entry && chk.ok) {
-        const tp = (side==="SHORT") ? shortTP : longTP;
-        const sl = (side==="SHORT") ? shortSL : longSL;
-
-        const nearTP = Math.abs(price - tp) / price * 100 <= nearPct;
-        const nearSL = Math.abs(price - sl) / price * 100 <= nearPct;
-
-        let hitTP=false, hitSL=false;
-        if (side === "LONG") { hitTP = price >= tp; hitSL = price <= sl; }
-        else { hitTP = price <= tp; hitSL = price >= sl; }
-
-        if (hitSL) status = `${side} SL 터치/돌파`;
-        else if (hitTP) status = `${side} TP 터치/돌파`;
-        else if (nearSL) status = `${side} SL 근접`;
-        else if (nearTP) status = `${side} TP 근접`;
+      // PnL (수익=빨강 / 손실=파랑)
+      const pnlEl = document.getElementById(`pnl_${sym}`);
+      if (pnlEl){
+        pnlEl.textContent = (d.pnl==null) ? "-" : fmt(d.pnl, 6);
+        pnlEl.className = (d.pnl==null) ? "" : (d.pnl>=0 ? "pnlPlus" : "pnlMinus");
       }
 
-      statusEl.className = `pill ${status.includes("터치")?"hit":status.includes("근접")?"warn":"neutral"}`;
-      statusEl.textContent = `상태: ${status || "-"}`;
+      const roiEl = document.getElementById(`roi_${sym}`);
+      if (roiEl) roiEl.textContent = (d.roi==null) ? "-" : fmt(d.roi, 2);
 
-      // PnL/ROI (전 방식 유지: Size=Margin*Lev, ROI=PnL/Margin)
-      let pnl = null, roi = null;
-      if (entry && margin > 0) {
-        const size = margin * lev;
-        const frac = (side === "SHORT") ? ((entry - price)/entry) : ((price - entry)/entry);
-        pnl = size * frac;
-        roi = (pnl / margin) * 100;
+      // 추천 pill
+      const rEl = document.getElementById(`reco_${sym}`);
+      if (rEl){
+        const txt = d.recommend || "-";
+        rEl.textContent = `추천: ${txt}`;
+        rEl.className = txt.includes("추천") ? "pill ok" : (txt.includes("비추천") ? "pill warn" : "pill trendNeutral");
       }
 
-      document.getElementById(`pnl_${i}`).textContent = pnl===null ? "-" : fmt(pnl, 6);
-      document.getElementById(`roi_${i}`).textContent = roi===null ? "-" : fmt(roi, 4);
+      const updEl = document.getElementById(`upd_${sym}`);
+      if (updEl) updEl.textContent = `업데이트: ${new Date(Number(mkt.ts)).toLocaleTimeString()}`;
+    });
 
-      metaEl.textContent =
-        `심볼: ${symC} / 레버리지: ${lev}x / Size=마진×레버리지 / price_ts=${new Date(q.price_ts).toLocaleTimeString()}`;
+    if (ma30Latest){
+      ma30TimeEl.textContent = new Date(ma30Latest).toLocaleString();
     }
-  } catch (e) {
-    syncInfo.textContent = `갱신 오류: ${String(e?.message || e)}`;
+  }catch(e){
+    console.error(e);
   }
 }
 
+// ===== 와치리스트/카드 버튼 =====
+document.getElementById("wlAdd").addEventListener("click", ()=>{
+  const v = normSym(document.getElementById("wlInput").value);
+  if (!v) return;
+  if (!watchlist.includes(v)) watchlist.unshift(v);
+  watchlist = Array.from(new Set(watchlist)).slice(0, 300);
+  saveJSON(WL_KEY, watchlist);
+  document.getElementById("wlInput").value = "";
+  render();
+});
+
+document.getElementById("wlDel").addEventListener("click", ()=>{
+  const sel = wlSelect.value;
+  if (!sel) return;
+  watchlist = watchlist.filter(s=>s!==sel);
+  active = active.filter(s=>s!==sel);
+  saveJSON(WL_KEY, watchlist);
+  saveJSON(ACTIVE_KEY, active);
+  render();
+});
+
+document.getElementById("btnAdd").addEventListener("click", ()=>{
+  const sel = wlSelect.value;
+  if (!sel) return;
+  if (active.includes(sel)) return;
+  active.push(sel);
+  clampActive();
+  render();
+});
+
+document.getElementById("btnRemove").addEventListener("click", ()=>{
+  const sel = wlSelect.value;
+  if (!sel) return;
+  active = active.filter(s=>s!==sel);
+  saveJSON(ACTIVE_KEY, active);
+  render();
+});
+
+render();
 refresh();
-setInterval(refresh, REFRESH_MS);
+setInterval(refresh, 5000); // 5초 갱신 (ticker 캐시 2초, ma30 캐시 5분)
