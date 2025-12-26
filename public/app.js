@@ -218,10 +218,13 @@ function renderCard(slotIndex) {
     </div>
 
     <div style="margin-top:10px">
-      <div>예상마진(PnL USDT): <b id="pnl_${slotIndex}">-</b></div>
-      <div>ROI(%): <b id="roi_${slotIndex}">-</b></div>
-      <div class="muted" id="meta_${slotIndex}">—</div>
-    </div>
+  <div>
+    예상마진(PnL USDT):
+    <b id="pnl_${slotIndex}" class="pnl">-</b>
+  </div>
+  <div>ROI(%): <b id="roi_${slotIndex}">-</b></div>
+  <div class="muted" id="meta_${slotIndex}">—</div>
+</div>
   `;
 
   // handlers
@@ -400,6 +403,7 @@ async function refresh() {
 
 refresh();
 setInterval(refresh, REFRESH_MS);
+
 
 
 
