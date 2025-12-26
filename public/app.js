@@ -403,6 +403,3 @@ async function refresh() {
 
 refresh();
 setInterval(refresh, REFRESH_MS);
-
-
-
