@@ -66,15 +66,15 @@ async function fetchTicker(sym) {
   return out;
 }
 
-// ====== MA30 (Day1 close avg) ======
-async function fetchMA30(sym) {
+// ✅ Day1 close 배열 (RSI/MA용)
+async function fetchDay1Closes(sym, days = 120) {
   const msym = mexcContractSymbol(sym);
-  const key = `ma30:${msym}`;
+  const key = `day1closes:${msym}:${days}`;
   const cached = getCache(key);
   if (cached) return cached;
 
   const nowSec = Math.floor(Date.now() / 1000);
-  const startSec = nowSec - 60 * 24 * 60 * 60; // 60일치 범위
+  const startSec = nowSec - days * 24 * 60 * 60;
   const url = `https://contract.mexc.com/api/v1/contract/kline/${encodeURIComponent(msym)}?interval=Day1&start=${startSec}&end=${nowSec}`;
 
   const json = await fetchJson(url);
@@ -82,6 +82,21 @@ async function fetchMA30(sym) {
 
   const closes = json.data.close.map(Number).filter(v => Number.isFinite(v));
   if (closes.length < 30) throw new Error("not enough candles");
+
+  const out = { symbol: msym, closes, ts: Date.now() };
+  setCache(key, out, 30 * 1000); // ✅ 30초 캐시(일봉 close)
+  return out;
+}
+
+// ====== MA30 (Day1 close avg) ======
+async function fetchMA30(sym) {
+  const msym = mexcContractSymbol(sym);
+  const key = `ma30:${msym}`;
+  const cached = getCache(key);
+  if (cached) return cached;
+
+  // ✅ close는 위 함수 재사용 (중복 호출 방지)
+  const { closes } = await fetchDay1Closes(msym, 120);
 
   const last30 = closes.slice(-30);
   const ma30 = last30.reduce((a, b) => a + b, 0) / 30;
@@ -93,6 +108,20 @@ async function fetchMA30(sym) {
 
 // ====== API ======
 app.get("/api/health", (req, res) => res.json({ ok: true }));
+
+// ✅ RSI용: Day1 close 배열 제공
+// 예: /api/kline_day1?symbol=BTCUSDT  또는 BTC_USDT
+app.get("/api/kline_day1", async (req, res) => {
+  try {
+    const sym = String(req.query.symbol || "").trim();
+    if (!sym) return res.status(400).json({ error: "symbol required" });
+
+    const r = await fetchDay1Closes(sym, 120);
+    res.json({ symbol: r.symbol, close: r.closes, ts: r.ts });
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message || e) });
+  }
+});
 
 // 단일: /api/quote?symbol=BTCUSDT
 app.get("/api/quote", async (req, res) => {
