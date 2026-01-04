@@ -53,20 +53,29 @@
     .item code{flex:1}
     .xbtn{background:#2b3550;border:1px solid #3c4b75;color:#fff;border-radius:10px;padding:6px 8px;cursor:pointer}
 
-    /* ✅ RSI 표시(오른쪽) */
-    .rsiBox{
-      position:absolute;
-      right:12px;
-      top:92px;
-      text-align:right;
-      line-height:1.9;
-      font-weight:900;
-      color:#d7b35a;
-      user-select:none;
-    }
-    @media (max-width: 640px){
-      .rsiBox{ top:102px; }
-    }
+    /* ✅ RSI 표시(PC: 오른쪽 고정 / 모바일: 겹침 방지) */
+.rsiBox{
+  position:absolute;
+  right:12px;
+  top:92px;
+  text-align:right;
+  line-height:1.9;
+  font-weight:900;
+  color:#d7b35a;
+  user-select:none;
+  pointer-events:none;
+}
+
+/* ✅ 모바일에서는 absolute 고정 해제 → 겹침 방지 */
+@media (max-width: 640px){
+  .rsiBox{
+    position:static;          /* 핵심: absolute 해제 */
+    margin-top:6px;
+    text-align:right;
+    line-height:1.6;
+    font-size:12px;
+  }
+}
 
     /* ✅ 상단 컨트롤 */
     .ctrl{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
