@@ -252,14 +252,18 @@ function renderCard(slotIndex) {
     <label>심볼 (와치리스트 드롭다운)</label>
     <select id="sym_${slotIndex}">${options}</select>
 
+   <div class="row" style="align-items:flex-start; gap:10px;">
+  <div style="flex:1; min-width:0;">
     <div class="big" id="price_${slotIndex}">현재가(Fair): -</div>
     <div class="muted" id="ma30_${slotIndex}">MA30: -</div>
+  </div>
 
-    <div class="rsiBox">
-      RSI(6): <span id="rsi6_${slotIndex}">-</span><br/>
-      RSI(12): <span id="rsi12_${slotIndex}">-</span><br/>
-      RSI(24): <span id="rsi24_${slotIndex}">-</span>
-    </div>
+  <div class="rsiBox">
+    RSI(6): <span id="rsi6_${slotIndex}">-</span><br/>
+    RSI(12): <span id="rsi12_${slotIndex}">-</span><br/>
+    RSI(24): <span id="rsi24_${slotIndex}">-</span>
+  </div>
+</div>
 
     <label>투자금(USDT)=마진(Margin)</label>
     <input id="margin_${slotIndex}" type="number" step="0.01" value="${inp.margin}"/>
@@ -541,3 +545,4 @@ async function refresh() {
 
 refresh();
 setInterval(refresh, REFRESH_MS);
+
