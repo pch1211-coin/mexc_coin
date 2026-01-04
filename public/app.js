@@ -1,9 +1,11 @@
 // ====== Config ======
-const RSI_INTERVAL = "Win15"; // MEXC 차트 분봉과 동일하게 맟춰
-const RSI_DAYS = 5;    //15m면 3~7일 정도면 충분(30일은 너무큼)
 const TREND_BAND_PCT = 0.3;
 const REFRESH_MS = 3000;       // 현재가 갱신 주기(서버 캐시 2초)
 const MA30_TTL_NOTE = "MA30는 서버에서 5분 캐시";
+
+// ✅ RSI는 MEXC 차트와 동일한 15분봉 기준
+const RSI_INTERVAL = "Min15";
+const RSI_DAYS = 7; // 15분봉 RSI(24) 계산용 충분 캔들 확보
 
 const DEFAULT_WATCHLIST = [
   "BTCUSDT","ETHUSDT","COREUSDT","WLDUSDT","PIUSDT","DOGEUSDT","XRPUSDT","TRXUSDT"
@@ -11,7 +13,7 @@ const DEFAULT_WATCHLIST = [
 
 const LEV_OPTIONS = [1,3,5,10,15,20,25,30,35,40,45,50];
 
-// 슬롯 개수: 모바일 6 / PC 12 (반응형이라 슬롯은 12 고정 렌더, 모바일은 스크롤 없이 6개가 ‘한 화면’ 목표)
+// 슬롯 개수: 모바일 6 / PC 12
 const SLOT_COUNT = 12;
 
 // ====== Storage ======
@@ -24,7 +26,7 @@ function normSymForUI(s) {
   return String(s || "").trim().toUpperCase();
 }
 
-// MEXC 선물 심볼로 변환(표시도 통일)
+// 선물 심볼 표준화
 function toContractSym(sym) {
   const s = normSymForUI(sym);
   if (!s) return "";
@@ -40,26 +42,23 @@ if (!Array.isArray(watchlist) || watchlist.length === 0) {
   saveJSON("wl", watchlist);
 }
 
-// 슬롯별 선택된 심볼
 let slots = loadJSON("slots", null);
 if (!Array.isArray(slots) || slots.length !== SLOT_COUNT) {
-  // 기본 배치: 와치리스트 앞에서 12개 채우기(모자라면 반복)
   slots = Array.from({ length: SLOT_COUNT }, (_, i) => watchlist[i % watchlist.length]);
   saveJSON("slots", slots);
 }
 
-// 심볼별 입력값(=DASH 입력칸들)
 let inputsMap = loadJSON("inputsMap", {});
 function ensureInputs(sym) {
   const s = normSymForUI(sym);
   inputsMap[s] ||= {
-    margin: 5.8,      // 투자금(USDT) = Margin
-    leverage: 20,     // 레버리지
-    entry: 0,         // 진입가
-    side: "SHORT",    // LONG/SHORT
-    tp_pct: 1.5,      // 목표수익(%)
-    sl_pct: 0.7,      // 손절(%)
-    near_pct: 0.5     // 근접기준(%)
+    margin: 5.8,
+    leverage: 20,
+    entry: 0,
+    side: "SHORT",
+    tp_pct: 1.5,
+    sl_pct: 0.7,
+    near_pct: 0.5
   };
   return inputsMap[s];
 }
@@ -69,7 +68,7 @@ function saveAll() {
   saveJSON("inputsMap", inputsMap);
 }
 
-// ====== Calculations (DASH 방식 유지) ======
+// ====== Calculations ======
 function calcTrend(price, ma30, prevTrend) {
   if (!price || !ma30) return "NONE";
   const upper = ma30 * (1 + TREND_BAND_PCT / 100);
@@ -119,12 +118,11 @@ wlAdd.onclick = () => {
   if (!watchlist.includes(v)) watchlist.unshift(v);
   wlInput.value = "";
   saveAll();
-  renderAll(); // 드롭다운 옵션 갱신
+  renderAll();
   renderWatchlist();
 };
 
 btnReset.onclick = () => {
-  // 슬롯을 와치리스트 기준으로 다시 자동 배치
   slots = Array.from({ length: SLOT_COUNT }, (_, i) => watchlist[i % watchlist.length]);
   saveAll();
   renderAll();
@@ -139,7 +137,6 @@ function renderWatchlist() {
     row.querySelector("button").onclick = () => {
       watchlist = watchlist.filter(s => s !== sym);
       if (watchlist.length === 0) watchlist = DEFAULT_WATCHLIST.slice();
-      // 슬롯에서 지워진 심볼은 첫번째로 치환
       slots = slots.map(s => (s === sym ? watchlist[0] : s));
       saveAll();
       renderAll();
@@ -157,7 +154,6 @@ function renderCard(slotIndex) {
   card.className = "card";
   card.id = `card_${slotIndex}`;
 
-  // 드롭다운 옵션
   const options = watchlist.map(s => {
     const sel = (s === sym) ? "selected" : "";
     return `<option value="${s}" ${sel}>${s}</option>`;
@@ -177,7 +173,7 @@ function renderCard(slotIndex) {
     <label>심볼 (와치리스트 드롭다운)</label>
     <select id="sym_${slotIndex}">${options}</select>
 
-    <!-- ✅ 현재가/MA30 왼쪽 + RSI(6/12/24) 오른쪽 노란표시 -->
+    <!-- 현재가/MA30 왼쪽 + RSI(6/12/24) 오른쪽 -->
     <div class="priceWrap">
       <div>
         <div class="big" id="price_${slotIndex}">현재가(Fair): -</div>
@@ -230,10 +226,7 @@ function renderCard(slotIndex) {
     </div>
 
     <div style="margin-top:10px">
-      <div>
-        예상마진(PnL USDT):
-        <b id="pnl_${slotIndex}" class="pnl">-</b>
-      </div>
+      <div>예상마진(PnL USDT): <b id="pnl_${slotIndex}" class="pnl">-</b></div>
       <div>ROI(%): <b id="roi_${slotIndex}">-</b></div>
       <div class="muted" id="meta_${slotIndex}">—</div>
     </div>
@@ -243,7 +236,7 @@ function renderCard(slotIndex) {
   card.querySelector(`#sym_${slotIndex}`).onchange = (e) => {
     slots[slotIndex] = normSymForUI(e.target.value);
     saveAll();
-    renderAll(); // 심볼 바뀌면 카드 전체 리렌더(입력맵/표시 매칭)
+    renderAll();
   };
 
   const bindNum = (id, key) => {
@@ -300,7 +293,6 @@ async function refresh() {
     const map = new Map();
     (json.results || []).forEach(r => map.set(normSymForUI(r.symbol), r));
 
-    // 화면 업데이트
     const now = new Date();
     syncInfo.textContent = `갱신: ${now.toLocaleTimeString()} / ${MA30_TTL_NOTE}`;
 
@@ -325,7 +317,6 @@ async function refresh() {
       const recoEl = document.getElementById(`reco_${i}`);
       const metaEl = document.getElementById(`meta_${i}`);
 
-      // ✅ RSI 표시 엘리먼트
       const rsi6El  = document.getElementById(`rsi6_${i}`);
       const rsi12El = document.getElementById(`rsi12_${i}`);
       const rsi24El = document.getElementById(`rsi24_${i}`);
@@ -340,7 +331,6 @@ async function refresh() {
         recoEl.className = "pill warn";
         recoEl.textContent = `추천: 오류`;
         metaEl.textContent = q?.error ? `에러: ${q.error}` : "데이터 없음";
-
         if (rsi6El) rsi6El.textContent = "-";
         if (rsi12El) rsi12El.textContent = "-";
         if (rsi24El) rsi24El.textContent = "-";
@@ -353,22 +343,12 @@ async function refresh() {
       priceEl.textContent = `현재가(Fair): ${fmt(price, 6)}`;
       maEl.textContent = `MA30: ${fmt(ma30, 6)}`;
 
-      // ✅ RSI 값 표시: 서버에서 rsi를 안 주면 로컬 캐시 값 사용
-      const cached = _rsiCache.get(symUI);
-      const rsi6  = (cached ? cached.rsi6  : NaN);
-      const rsi12 = (cached ? cached.rsi12 : NaN);
-      const rsi24 = (cached ? cached.rsi24 : NaN);
-
-      if (rsi6El)  rsi6El.textContent  = isFinite(rsi6)  ? rsi6.toFixed(2)  : "-";
-      if (rsi12El) rsi12El.textContent = isFinite(rsi12) ? rsi12.toFixed(2) : "-";
-      if (rsi24El) rsi24El.textContent = isFinite(rsi24) ? rsi24.toFixed(2) : "-";
-
-      // Trend
+      // 트렌드
       const t = calcTrend(price, ma30, null);
       trendEl.className = `pill ${t==="UP"?"up":t==="DOWN"?"down":"neutral"}`;
       trendEl.textContent = `트렌드: ${t==="UP"?"상승":t==="DOWN"?"하락":"중립"}`;
 
-      // Recommend (트렌드 방향일 때만 추천)
+      // 추천
       let reco = "대기";
       if (t === "UP") reco = "LONG 진입 추천";
       if (t === "DOWN") reco = "SHORT 진입 추천";
@@ -391,7 +371,7 @@ async function refresh() {
       document.getElementById(`stp_${i}`).textContent = entry ? fmt(shortTP, 6) : "-";
       document.getElementById(`ssl_${i}`).textContent = entry ? fmt(shortSL, 6) : "-";
 
-      // Status (근접/터치)
+      // 상태(근접/터치)
       let status = "";
       if (entry && chk.ok) {
         const tp = (side==="SHORT") ? shortTP : longTP;
@@ -413,7 +393,7 @@ async function refresh() {
       statusEl.className = `pill ${status.includes("터치")?"hit":status.includes("근접")?"warn":"neutral"}`;
       statusEl.textContent = `상태: ${status || "-"}`;
 
-      // PnL/ROI (전 방식 유지: Size=Margin*Lev, ROI=PnL/Margin)
+      // PnL/ROI
       let pnl = null, roi = null;
       if (entry && margin > 0) {
         const size = margin * lev;
@@ -428,7 +408,6 @@ async function refresh() {
       pnlEl.textContent = pnl===null ? "-" : fmt(pnl, 6);
       roiEl.textContent = roi===null ? "-" : fmt(roi, 4);
 
-      // ✅ PnL 색상 적용 (index.html에 pnLPlus/pnLMinus 클래스가 있음)
       pnlEl.classList.remove("pnLPlus", "pnLMinus");
       if (pnl !== null && isFinite(pnl)) {
         pnlEl.classList.add(pnl >= 0 ? "pnLPlus" : "pnLMinus");
@@ -445,21 +424,28 @@ async function refresh() {
 refresh();
 setInterval(refresh, REFRESH_MS);
 
-// ================================
-// ✅ RSI(6/12/24) 로컬 계산/캐시 (서버 /api/kline_day1 사용)
-// ================================
+// ====== RSI(15분봉) 계산/캐시 ======
 function calcRSI_Wilder_(closes, period) {
-  const arr = closes.slice(-(period + 1));
-  if (arr.length < period + 1) return NaN;
+  const arr = closes.map(Number).filter(v => Number.isFinite(v));
+  if (arr.length < period + 2) return NaN;
 
-  let gains = 0, losses = 0;
-  for (let i = 1; i < arr.length; i++) {
-    const diff = arr[i] - arr[i - 1];
-    if (diff >= 0) gains += diff;
-    else losses += (-diff);
+  let gain = 0, loss = 0;
+  for (let i = 1; i <= period; i++) {
+    const d = arr[i] - arr[i - 1];
+    if (d >= 0) gain += d;
+    else loss += (-d);
   }
-  const avgGain = gains / period;
-  const avgLoss = losses / period;
+  let avgGain = gain / period;
+  let avgLoss = loss / period;
+
+  for (let i = period + 1; i < arr.length; i++) {
+    const d = arr[i] - arr[i - 1];
+    const g = d > 0 ? d : 0;
+    const l = d < 0 ? -d : 0;
+    avgGain = (avgGain * (period - 1) + g) / period;
+    avgLoss = (avgLoss * (period - 1) + l) / period;
+  }
+
   if (avgLoss === 0) return 100;
   const rs = avgGain / avgLoss;
   return 100 - (100 / (1 + rs));
@@ -467,7 +453,9 @@ function calcRSI_Wilder_(closes, period) {
 
 async function fetchDailyCloses_(symUI) {
   const msym = toContractSym(symUI);
-  const res = await fetch(`/api/kline?symbol=${encodeURIComponent(msym)}&interval=${encodeURIComponent(RSI_INTERVAL)}&days=${encodeURIComponent(RSI_DAYS)}`);
+  const res = await fetch(
+    `/api/kline?symbol=${encodeURIComponent(msym)}&interval=${encodeURIComponent(RSI_INTERVAL)}&days=${encodeURIComponent(RSI_DAYS)}`
+  );
   const json = await res.json();
   if (!res.ok) throw new Error(json?.error || "kline api error");
 
@@ -476,8 +464,8 @@ async function fetchDailyCloses_(symUI) {
   return closes;
 }
 
-const _rsiCache = new Map(); // symUI -> {ts, rsi6,rsi12,rsi24}
-const RSI_CACHE_MS = 30 * 1000; // 30초 캐시
+const _rsiCache = new Map(); // sym -> {ts, rsi6,rsi12,rsi24}
+const RSI_CACHE_MS = 30 * 1000;
 let _rsiBusy = false;
 
 async function refreshRSI_Once() {
@@ -502,12 +490,24 @@ async function refreshRSI_Once() {
         _rsiCache.set(sym, { ts: now, rsi6: NaN, rsi12: NaN, rsi24: NaN });
       }
     }
+
+    // 화면 반영
+    for (let i = 0; i < SLOT_COUNT; i++) {
+      const sym = normSymForUI(slots[i]);
+      const c = _rsiCache.get(sym);
+      if (!c) continue;
+      const e6 = document.getElementById(`rsi6_${i}`);
+      const e12 = document.getElementById(`rsi12_${i}`);
+      const e24 = document.getElementById(`rsi24_${i}`);
+      if (e6)  e6.textContent  = Number.isFinite(c.rsi6)  ? c.rsi6.toFixed(2)  : "-";
+      if (e12) e12.textContent = Number.isFinite(c.rsi12) ? c.rsi12.toFixed(2) : "-";
+      if (e24) e24.textContent = Number.isFinite(c.rsi24) ? c.rsi24.toFixed(2) : "-";
+    }
   } finally {
     _rsiBusy = false;
   }
 }
 
-// ✅ 최초 1회 + 5초마다 체크(실제 fetch는 30초 캐시로 제한)
+// 최초 + 주기 실행(5초 마다 체크, 실제 호출은 30초 캐시)
 refreshRSI_Once();
 setInterval(refreshRSI_Once, 5000);
-
