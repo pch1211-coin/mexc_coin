@@ -66,66 +66,69 @@ async function fetchTicker(sym) {
   return out;
 }
 
-// ====== KLINE close 제공 (분봉/일봉 공용) ======
-// 예: /api/kline?symbol=WLD_USDT&interval=Min15&days=7
-async function fetchKlineCloses(sym, interval = "Day1", days = 7) {
+// ====== MA30 (15분봉 기준) ======
+async function fetchMA30_15m(sym) {
   const msym = mexcContractSymbol(sym);
-  const d = Math.min(120, Math.max(1, Number(days || 7)));
-  const itv = String(interval || "Day1").trim();
-
-  const key = `kline:${msym}:${itv}:${d}`;
+  const key = `ma30_15m:${msym}`;
   const cached = getCache(key);
   if (cached) return cached;
 
+  // 15분봉 30개 = 7.5시간 → 2일 범위면 충분
   const nowSec = Math.floor(Date.now() / 1000);
-  const startSec = nowSec - d * 24 * 60 * 60;
+  const startSec = nowSec - 2 * 24 * 60 * 60;
 
-  const url = `https://contract.mexc.com/api/v1/contract/kline/${encodeURIComponent(msym)}?interval=${encodeURIComponent(itv)}&start=${startSec}&end=${nowSec}`;
+  const url =
+    `https://contract.mexc.com/api/v1/contract/kline/${encodeURIComponent(msym)}` +
+    `?interval=Min15&start=${startSec}&end=${nowSec}`;
+
   const json = await fetchJson(url);
   if (!json?.success || !json.data?.close) throw new Error("kline fail");
 
-  const close = json.data.close.map(Number).filter(v => Number.isFinite(v));
-  if (close.length < 30) throw new Error("not enough candles");
+  const closes = json.data.close.map(Number).filter(v => Number.isFinite(v));
+  if (closes.length < 30) throw new Error("not enough candles");
 
-  const out = { symbol: msym, interval: itv, close, ts: Date.now() };
-  // ✅ 분봉은 짧게 캐시, 일봉은 조금 길게 캐시
-  const ttl = (itv === "Day1") ? 30 * 1000 : 10 * 1000;
-  setCache(key, out, ttl);
-  return out;
-}
-
-// ====== MA30 (Day1 close avg) ======
-async function fetchMA30(sym) {
-  const msym = mexcContractSymbol(sym);
-  const key = `ma30:${msym}`;
-  const cached = getCache(key);
-  if (cached) return cached;
-
-  // Day1 close 가져와서 MA30 계산
-  const k = await fetchKlineCloses(msym, "Day1", 120);
-  const closes = k.close;
   const last30 = closes.slice(-30);
   const ma30 = last30.reduce((a, b) => a + b, 0) / 30;
 
   const out = { symbol: msym, ma30, ts: Date.now() };
-  setCache(key, out, 5 * 60 * 1000); // 5분 캐시(MA30)
+  setCache(key, out, 10 * 1000); // 10초 캐시
   return out;
 }
 
 // ====== API ======
 app.get("/api/health", (req, res) => res.json({ ok: true }));
 
-// ✅ KLINE API
+// ✅ 공용 KLINE (분봉/일봉) close 제공
+// 예: /api/kline?symbol=WLD_USDT&interval=Min15&days=7
 app.get("/api/kline", async (req, res) => {
   try {
     const symbol = String(req.query.symbol || "").trim();
-    const interval = String(req.query.interval || "Day1").trim();
-    const days = Number(req.query.days || 7);
+    const interval = String(req.query.interval || "Day1").trim(); // Day1, Min1, Min5, Min15, Min60...
+    const days = Math.min(120, Math.max(1, Number(req.query.days || 7)));
 
     if (!symbol) return res.status(400).json({ error: "symbol required" });
 
-    const r = await fetchKlineCloses(symbol, interval, days);
-    return res.json(r);
+    const msym = mexcContractSymbol(symbol);
+    const nowSec = Math.floor(Date.now() / 1000);
+    const startSec = nowSec - days * 24 * 60 * 60;
+
+    const key = `kline:${msym}:${interval}:${days}`;
+    const cached = getCache(key);
+    if (cached) return res.json(cached);
+
+    const url =
+      `https://contract.mexc.com/api/v1/contract/kline/${encodeURIComponent(msym)}` +
+      `?interval=${encodeURIComponent(interval)}&start=${startSec}&end=${nowSec}`;
+
+    const json = await fetchJson(url);
+    if (!json?.success || !json.data?.close) throw new Error("kline fail");
+
+    const close = json.data.close.map(Number).filter(v => Number.isFinite(v));
+    if (close.length < 30) return res.status(502).json({ error: "not enough closes" });
+
+    const out = { symbol: msym, interval, close, ts: Date.now() };
+    setCache(key, out, interval.startsWith("Min") ? 10 * 1000 : 30 * 1000);
+    return res.json(out);
   } catch (e) {
     return res.status(500).json({ error: String(e?.message || e) });
   }
@@ -136,7 +139,10 @@ app.get("/api/quote", async (req, res) => {
   try {
     const sym = String(req.query.symbol || "BTCUSDT");
     const t = await fetchTicker(sym);
-    const m = await fetchMA30(sym);
+
+    // ✅ MA30은 15분봉 기준
+    const m = await fetchMA30_15m(sym);
+
     res.json({
       symbol: t.symbol,
       fair: t.fair,
@@ -144,7 +150,8 @@ app.get("/api/quote", async (req, res) => {
       index: t.index,
       ma30: m.ma30,
       ma30_ts: m.ts,
-      price_ts: t.ts
+      price_ts: t.ts,
+      ma30_interval: "Min15"
     });
   } catch (e) {
     res.status(500).json({ error: String(e?.message || e) });
@@ -161,7 +168,10 @@ app.get("/api/quote_batch", async (req, res) => {
     for (const sym of symbols) {
       try {
         const t = await fetchTicker(sym);
-        const m = await fetchMA30(sym);
+
+        // ✅ MA30은 15분봉 기준
+        const m = await fetchMA30_15m(sym);
+
         results.push({
           symbol: t.symbol,
           fair: t.fair,
@@ -169,7 +179,8 @@ app.get("/api/quote_batch", async (req, res) => {
           index: t.index,
           ma30: m.ma30,
           ma30_ts: m.ts,
-          price_ts: t.ts
+          price_ts: t.ts,
+          ma30_interval: "Min15"
         });
       } catch (e) {
         results.push({ symbol: mexcContractSymbol(sym), error: String(e?.message || e) });
