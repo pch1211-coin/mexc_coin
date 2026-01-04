@@ -511,19 +511,53 @@ function calcRSI_Wilder_(closes, period) {
 
 async function fetchKlineCloses_(symUI) {
   const msym = toContractSym(symUI);
-  const res = await fetch(
-    `/api/kline?symbol=${encodeURIComponent(msym)}&interval=${encodeURIComponent(RSI_INTERVAL)}&days=${encodeURIComponent(RSI_DAYS)}`
-  );
-  const json = await res.json();
-  if (!res.ok) throw new Error(json?.error || "kline api error");
+  const url = `/api/kline?symbol=${encodeURIComponent(msym)}&interval=${encodeURIComponent(RSI_INTERVAL)}&days=${encodeURIComponent(RSI_DAYS)}`;
+  const res = await fetch(url);
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json?.error || `kline http ${res.status}`);
   const closes = (json?.close || []).map(Number).filter(v => Number.isFinite(v));
   if (closes.length < 30) throw new Error("not enough closes");
   return closes;
 }
 
+// sym -> {ts, rsi6,rsi12,rsi24, err?}
 const _rsiCache = new Map();
 const RSI_CACHE_MS = 30 * 1000;
 let _rsiBusy = false;
+
+function updateRsiUIForSlot_(slotIndex, symKey) {
+  const c = _rsiCache.get(symKey);
+
+  const e6  = document.getElementById(`rsi6_${slotIndex}`);
+  const e12 = document.getElementById(`rsi12_${slotIndex}`);
+  const e24 = document.getElementById(`rsi24_${slotIndex}`);
+  if (!e6 || !e12 || !e24) return;
+
+  if (!c) {
+    e6.textContent = "-";
+    e12.textContent = "-";
+    e24.textContent = "-";
+    return;
+  }
+
+  if (c.err) {
+    e6.textContent = "ERR";
+    e12.textContent = "ERR";
+    e24.textContent = "ERR";
+    return;
+  }
+
+  e6.textContent  = Number.isFinite(c.rsi6)  ? c.rsi6.toFixed(2)  : "-";
+  e12.textContent = Number.isFinite(c.rsi12) ? c.rsi12.toFixed(2) : "-";
+  e24.textContent = Number.isFinite(c.rsi24) ? c.rsi24.toFixed(2) : "-";
+}
+
+function updateAllRsiUI_() {
+  for (let i = 0; i < SLOT_COUNT; i++) {
+    const symKey = normSymForUI(slots[i]);
+    updateRsiUIForSlot_(i, symKey);
+  }
+}
 
 async function refreshRSI_Once() {
   if (_rsiBusy) return;
@@ -533,23 +567,34 @@ async function refreshRSI_Once() {
     const uniqSyms = [...new Set(slots.map(normSymForUI).filter(Boolean))];
     const now = Date.now();
 
-    for (const sym of uniqSyms) {
-      const cached = _rsiCache.get(sym);
-      if (cached && (now - cached.ts) < RSI_CACHE_MS) continue;
+    // ✅ 캐시 만료된 것만 병렬로 처리
+    const need = uniqSyms.filter(sym => {
+      const c = _rsiCache.get(sym);
+      return !c || (now - c.ts) >= RSI_CACHE_MS;
+    });
 
+    const jobs = need.map(async (sym) => {
       try {
         const closes = await fetchKlineCloses_(sym);
         const rsi6  = calcRSI_Wilder_(closes, 6);
         const rsi12 = calcRSI_Wilder_(closes, 12);
         const rsi24 = calcRSI_Wilder_(closes, 24);
         _rsiCache.set(sym, { ts: now, rsi6, rsi12, rsi24 });
-      } catch {
-        _rsiCache.set(sym, { ts: now, rsi6: NaN, rsi12: NaN, rsi24: NaN });
+      } catch (e) {
+        _rsiCache.set(sym, { ts: now, err: String(e?.message || e), rsi6: NaN, rsi12: NaN, rsi24: NaN });
+        console.log("[RSI] fail", sym, e);
       }
-    }
+    });
+
+    await Promise.allSettled(jobs);
+
+    // ✅ 계산 끝나면 즉시 화면 반영 (refresh() 기다리지 않음)
+    updateAllRsiUI_();
   } finally {
     _rsiBusy = false;
   }
 }
+
+// 최초 1회 바로 + 주기 갱신
 refreshRSI_Once();
 setInterval(refreshRSI_Once, 5000);
