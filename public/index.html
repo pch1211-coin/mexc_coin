@@ -47,6 +47,20 @@
     /* ✅ 예상마진(PnL) 텍스트 색상 */
     .pnLPlus { color:#ff4d4d; }  /* 수익=빨강 */
     .pnLMinus{ color:#4d79ff; }  /* 손실=파랑 */
+   /* ...기존 그대로... */
+
+  /* ✅ RSI 노란 텍스트 (현재가 오른쪽 위치) */
+  .priceWrap{ display:flex; justify-content:space-between; gap:10px; align-items:flex-start; }
+  .rsiPanel{
+    text-align:right;
+    color:#f5c542;     /* 노란색 */
+    font-weight:900;
+    line-height:1.9;
+    min-width:120px;
+    font-size:13px;
+    margin-top:8px;
+  }
+  .rsiPanel span{ color:#f5c542; }
   </style>
 </head>
 <body>
