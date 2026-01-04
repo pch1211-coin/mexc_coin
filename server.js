@@ -10,7 +10,7 @@ const PORT = process.env.PORT || 3000;
  * - 기본값을 네 Worker로 박아둠
  * - 필요하면 Render 환경변수 MEXC_BASE로 교체 가능
  */
-const MEXC_BASE = process.env.MEXC_BASE || "https://mexc-proxy-pch1211.workers.dev";
+const MEXC_BASE = process.env.MEXC_BASE || "https://mexc-proxy.pch1211.workers.dev";
 
 // ====== Static (public) ======
 app.use(express.static(path.join(__dirname, "public")));
@@ -234,3 +234,4 @@ app.get("/api/quote_batch", async (req, res) => {
 });
 
 app.listen(PORT, () => console.log("✅ Server running on port", PORT, " / MEXC_BASE:", MEXC_BASE));
+
