@@ -1,6 +1,3 @@
-변경 에이피피
-
-
 // ====== Config ======
 const TREND_BAND_PCT = 0.3;
 const REFRESH_MS = 3000;
@@ -544,3 +541,4 @@ async function refresh() {
 
 refresh();
 setInterval(refresh, REFRESH_MS);
+
