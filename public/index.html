@@ -49,18 +49,23 @@
     .item code{flex:1}
     .xbtn{background:#2b3550;border:1px solid #3c4b75;color:#fff;border-radius:10px;padding:6px 8px;cursor:pointer}
 
-    /* ✅ RSI 표시(오른쪽) */
+   /* ✅ RSI 표시(오른쪽) - 현재가 라인 옆 고정 */
     .rsiBox{
       position:absolute;
       right:12px;
-      top:118px;
+      top:92px;               /* ✅ 여기서 위로 올림(핵심) */
       text-align:right;
       line-height:1.9;
       font-weight:900;
       color:#d7b35a;
       text-shadow:0 0 0.5px rgba(0,0,0,.4);
       user-select:none;
-    }
+}
+
+/* ✅ 모바일에서는 글자/줄바꿈 때문에 살짝 더 내림 */
+@media (max-width: 640px){
+  .rsiBox{ top:102px; }
+}
 
     /* ✅ 점멸 */
     @keyframes blinkBlue { 0%,100%{box-shadow:0 0 0 rgba(77,121,255,0)} 50%{box-shadow:0 0 18px rgba(77,121,255,.85)} }
