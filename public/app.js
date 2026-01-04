@@ -1,4 +1,6 @@
 // ====== Config ======
+const RSI_INTERVAL = "Win15"; // MEXC 차트 분봉과 동일하게 맟춰
+const RSI_DAYS = 5;    //15m면 3~7일 정도면 충분(30일은 너무큼)
 const TREND_BAND_PCT = 0.3;
 const REFRESH_MS = 3000;       // 현재가 갱신 주기(서버 캐시 2초)
 const MA30_TTL_NOTE = "MA30는 서버에서 5분 캐시";
@@ -464,9 +466,8 @@ function calcRSI_Wilder_(closes, period) {
 }
 
 async function fetchDailyCloses_(symUI) {
-  // ✅ 서버가 day1 close 배열 제공
   const msym = toContractSym(symUI);
-  const res = await fetch(`/api/kline_day1?symbol=${encodeURIComponent(msym)}`);
+  const res = await fetch(`/api/kline?symbol=${encodeURIComponent(msym)}&interval=${encodeURIComponent(RSI_INTERVAL)}&days=${encodeURIComponent(RSI_DAYS)}`);
   const json = await res.json();
   if (!res.ok) throw new Error(json?.error || "kline api error");
 
@@ -509,3 +510,4 @@ async function refreshRSI_Once() {
 // ✅ 최초 1회 + 5초마다 체크(실제 fetch는 30초 캐시로 제한)
 refreshRSI_Once();
 setInterval(refreshRSI_Once, 5000);
+
