@@ -109,6 +109,27 @@
       display:none;
     }
     .card.confirmViz .confirmBadge{ display:inline-block; }
+    /* =========================
+   컨펌 시 슬롯 테두리 색상
+   ========================= */
+
+/* 기본 컨펌(공통) */
+.card.confirm {
+  border-width: 2px;
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.05);
+}
+
+/* 🔴 LONG 컨펌 */
+.card.confirm.long {
+  border-color: #ff4d4d !important;
+  box-shadow: 0 0 12px rgba(255, 77, 77, 0.35);
+}
+
+/* 🔵 SHORT 컨펌 */
+.card.confirm.short {
+  border-color: #4d79ff !important;
+  box-shadow: 0 0 12px rgba(77, 121, 255, 0.35);
+}
   </style>
 </head>
 <body>
