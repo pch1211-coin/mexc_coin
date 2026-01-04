@@ -66,25 +66,31 @@ async function fetchTicker(sym) {
   return out;
 }
 
-// ✅ Day1 close 배열 (RSI/MA용)
-async function fetchDay1Closes(sym, days = 120) {
+// ====== KLINE close 제공 (분봉/일봉 공용) ======
+// 예: /api/kline?symbol=WLD_USDT&interval=Min15&days=7
+async function fetchKlineCloses(sym, interval = "Day1", days = 7) {
   const msym = mexcContractSymbol(sym);
-  const key = `day1closes:${msym}:${days}`;
+  const d = Math.min(120, Math.max(1, Number(days || 7)));
+  const itv = String(interval || "Day1").trim();
+
+  const key = `kline:${msym}:${itv}:${d}`;
   const cached = getCache(key);
   if (cached) return cached;
 
   const nowSec = Math.floor(Date.now() / 1000);
-  const startSec = nowSec - days * 24 * 60 * 60;
-  const url = `https://contract.mexc.com/api/v1/contract/kline/${encodeURIComponent(msym)}?interval=Day1&start=${startSec}&end=${nowSec}`;
+  const startSec = nowSec - d * 24 * 60 * 60;
 
+  const url = `https://contract.mexc.com/api/v1/contract/kline/${encodeURIComponent(msym)}?interval=${encodeURIComponent(itv)}&start=${startSec}&end=${nowSec}`;
   const json = await fetchJson(url);
   if (!json?.success || !json.data?.close) throw new Error("kline fail");
 
-  const closes = json.data.close.map(Number).filter(v => Number.isFinite(v));
-  if (closes.length < 30) throw new Error("not enough candles");
+  const close = json.data.close.map(Number).filter(v => Number.isFinite(v));
+  if (close.length < 30) throw new Error("not enough candles");
 
-  const out = { symbol: msym, closes, ts: Date.now() };
-  setCache(key, out, 30 * 1000); // ✅ 30초 캐시(일봉 close)
+  const out = { symbol: msym, interval: itv, close, ts: Date.now() };
+  // ✅ 분봉은 짧게 캐시, 일봉은 조금 길게 캐시
+  const ttl = (itv === "Day1") ? 30 * 1000 : 10 * 1000;
+  setCache(key, out, ttl);
   return out;
 }
 
@@ -95,9 +101,9 @@ async function fetchMA30(sym) {
   const cached = getCache(key);
   if (cached) return cached;
 
-  // ✅ close는 위 함수 재사용 (중복 호출 방지)
-  const { closes } = await fetchDay1Closes(msym, 120);
-
+  // Day1 close 가져와서 MA30 계산
+  const k = await fetchKlineCloses(msym, "Day1", 120);
+  const closes = k.close;
   const last30 = closes.slice(-30);
   const ma30 = last30.reduce((a, b) => a + b, 0) / 30;
 
@@ -109,17 +115,19 @@ async function fetchMA30(sym) {
 // ====== API ======
 app.get("/api/health", (req, res) => res.json({ ok: true }));
 
-// ✅ RSI용: Day1 close 배열 제공
-// 예: /api/kline_day1?symbol=BTCUSDT  또는 BTC_USDT
-app.get("/api/kline_day1", async (req, res) => {
+// ✅ KLINE API
+app.get("/api/kline", async (req, res) => {
   try {
-    const sym = String(req.query.symbol || "").trim();
-    if (!sym) return res.status(400).json({ error: "symbol required" });
+    const symbol = String(req.query.symbol || "").trim();
+    const interval = String(req.query.interval || "Day1").trim();
+    const days = Number(req.query.days || 7);
 
-    const r = await fetchDay1Closes(sym, 120);
-    res.json({ symbol: r.symbol, close: r.closes, ts: r.ts });
+    if (!symbol) return res.status(400).json({ error: "symbol required" });
+
+    const r = await fetchKlineCloses(symbol, interval, days);
+    return res.json(r);
   } catch (e) {
-    res.status(500).json({ error: String(e?.message || e) });
+    return res.status(500).json({ error: String(e?.message || e) });
   }
 });
 
