@@ -86,7 +86,6 @@ function calcMA(closes, period) {
   if (arr.some(v => !isFinite(v))) return null;
   return arr.reduce((a,b)=>a+b,0) / period;
 }
-
 function calcRSI(closes, period) {
   if (!Array.isArray(closes) || closes.length < period + 1) return null;
   const c = closes.map(Number);
@@ -104,7 +103,7 @@ function calcRSI(closes, period) {
 }
 
 // ====== Kline cache ======
-const klineCache = new Map(); // key: `${sym}|${tf}` -> { ts, closes, ma30, r6, r12, r24 }
+const klineCache = new Map(); // key: `${sym}|${tf}` -> { ts, ma30, r6, r12, r24 }
 
 async function getKlineStats(symContract, tf) {
   const key = `${symContract}|${tf}`;
@@ -114,7 +113,7 @@ async function getKlineStats(symContract, tf) {
   const url = `/api/kline?symbol=${encodeURIComponent(symContract)}&interval=${encodeURIComponent(tf)}&days=7`;
   const r = await fetch(url);
   const j = await r.json();
-  if (!Array.isArray(j.close)) throw new Error("kline no close");
+  if (!Array.isArray(j.close)) throw new Error(j?.error || "kline no close");
 
   const closes = j.close.map(Number).filter(v => isFinite(v));
   const ma30 = calcMA(closes, 30);
@@ -122,12 +121,12 @@ async function getKlineStats(symContract, tf) {
   const r12 = calcRSI(closes, 12);
   const r24 = calcRSI(closes, 24);
 
-  const out = { ts: Date.now(), closes, ma30, r6, r12, r24 };
+  const out = { ts: Date.now(), ma30, r6, r12, r24 };
   klineCache.set(key, out);
   return out;
 }
 
-// ====== Alert / Blink / Vibe / Sound ======
+// ====== Sound / Vibe ======
 let soundOn = loadJSON("soundOn", true);
 function saveSound() { saveJSON("soundOn", soundOn); }
 
@@ -150,10 +149,7 @@ function beep(times=1) {
     t += 0.18;
   }
 }
-
-function vibrateOnce() {
-  if (navigator.vibrate) navigator.vibrate(200);
-}
+function vibrateOnce() { if (navigator.vibrate) navigator.vibrate(200); }
 
 // slotIndex -> { nearUntil, confirmUntil }
 const alertUntil = new Map();
@@ -246,6 +242,8 @@ function renderCard(slotIndex) {
   }).join("");
 
   card.innerHTML = `
+    <div class="confirmBadge">컨펌</div>
+
     <div class="row">
       <div class="title">슬롯 ${slotIndex+1}</div>
       <span class="pill neutral" id="trend_${slotIndex}">트렌드: -</span>
@@ -303,10 +301,7 @@ function renderCard(slotIndex) {
     </div>
 
     <div style="margin-top:10px">
-      <div>
-        예상마진(PnL USDT):
-        <b id="pnl_${slotIndex}" class="pnl">-</b>
-      </div>
+      <div>예상마진(PnL USDT): <b id="pnl_${slotIndex}" class="pnl">-</b></div>
       <div>ROI(%): <b id="roi_${slotIndex}">-</b></div>
       <div class="muted" id="meta_${slotIndex}">—</div>
     </div>
@@ -408,12 +403,13 @@ async function refresh() {
 
       const cardEl = document.getElementById(`card_${i}`);
 
-      // 점멸 만료 적용
+      // 현재 상태 유지용 타이머
       const au = alertUntil.get(i) || { nearUntil: 0, confirmUntil: 0 };
       const nowTs = Date.now();
-      cardEl.classList.remove("blinkBlue","blinkRed");
-      if (au.confirmUntil > nowTs) cardEl.classList.add("blinkRed");
-      else if (au.nearUntil > nowTs) cardEl.classList.add("blinkBlue");
+
+      // ✅ 컨펌 시각화(깜빡임 없음)
+      cardEl.classList.remove("confirmViz");
+      if (au.confirmUntil > nowTs) cardEl.classList.add("confirmViz");
 
       if (!q || q.error || !isFinite(q.fair)) {
         priceEl.textContent = `현재가(Fair): -`;
@@ -434,7 +430,7 @@ async function refresh() {
       const price = Number(q.fair);
       priceEl.textContent = `현재가(Fair): ${fmt(price, 6)}`;
 
-      // RSI/MA30 (선택 TF) 계산 + 표시
+      // RSI/MA30 (선택 TF)
       let ma30 = null;
       try {
         const stats = await getKlineStats(symC, tf);
@@ -444,13 +440,14 @@ async function refresh() {
         r12El.textContent = (stats.r12 == null) ? "-" : stats.r12.toFixed(2);
         r24El.textContent = (stats.r24 == null) ? "-" : stats.r24.toFixed(2);
 
-        maEl.textContent = `MA30: ${ma30==null ? "-" : fmt(ma30, 6)} (${tf === "Min5" ? "5분" : tf==="Min15" ? "15분" : "30분"})`;
+        const tfTxt = (tf==="Min5") ? "5분" : (tf==="Min15") ? "15분" : "30분";
+        maEl.textContent = `MA30: ${ma30==null ? "-" : fmt(ma30, 6)} (${tfTxt})`;
       } catch (e) {
         maEl.textContent = `MA30: -`;
         r6El.textContent = r12El.textContent = r24El.textContent = "ERR";
       }
 
-      // Trend (MA30 있어야 계산)
+      // Trend
       const t = calcTrend(price, ma30, null);
       trendEl.className = `pill ${t==="UP"?"up":t==="DOWN"?"down":"neutral"}`;
       trendEl.textContent = `트렌드: ${t==="UP"?"상승":t==="DOWN"?"하락":"중립"}`;
@@ -478,7 +475,7 @@ async function refresh() {
       document.getElementById(`stp_${i}`).textContent = entry ? fmt(shortTP, 6) : "-";
       document.getElementById(`ssl_${i}`).textContent = entry ? fmt(shortSL, 6) : "-";
 
-      // Status (TP/SL 근접/터치)
+      // Status (근접/터치)
       let status = "";
       if (entry && chk.ok) {
         const tp = (side==="SHORT") ? shortTP : longTP;
@@ -516,17 +513,16 @@ async function refresh() {
 
       metaEl.textContent = `심볼: ${symC} / 레버리지: ${lev}x / price_ts=${new Date(q.price_ts).toLocaleTimeString()}`;
 
-      // ✅ 근접/컨펌 알림 (price vs MA30 기준)
+      // ✅ 근접/컨펌 알림 (price vs MA30 거리%)
       if (isFinite(ma30) && ma30 > 0) {
         const distPct = Math.abs(price - ma30) / ma30 * 100;
 
-        // 근접: distPct <= nearPctGlobal
+        // 근접: 화면표시만(여기서는 시각화 없음)
         if (distPct <= nearPctG) {
-          if (au.nearUntil <= nowTs) beep(1);
           au.nearUntil = nowTs + nearShowMs;
         }
 
-        // 컨펌: distPct >= confirmPctGlobal
+        // 컨펌: 소리 3회 + (모바일)진동 + 시각화 유지
         if (distPct >= confirmPctG) {
           if (au.confirmUntil <= nowTs) {
             beep(3);
