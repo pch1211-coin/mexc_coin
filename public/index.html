@@ -13,6 +13,7 @@
     .muted{opacity:.75;font-size:12px}
     .wrap{padding:12px}
     .grid{display:grid;gap:10px}
+
     /* 모바일: 2열 */
     @media (max-width: 640px){ .grid{grid-template-columns:repeat(2, minmax(0,1fr));} }
     /* 태블릿: 3열 */
@@ -20,7 +21,10 @@
     /* PC: 4열 */
     @media (min-width: 1024px){ .grid{grid-template-columns:repeat(4, minmax(0,1fr));} }
 
-    .card{background:#111a2e;border:1px solid #1f2c4a;border-radius:14px;padding:12px; position:relative; overflow:hidden;}
+    .card{
+      background:#111a2e;border:1px solid #1f2c4a;border-radius:14px;
+      padding:12px; position:relative; overflow:hidden;
+    }
     .row{display:flex;justify-content:space-between;gap:10px;align-items:center}
     .title{font-weight:800}
     select,input{width:100%;padding:8px;border-radius:10px;border:1px solid #263a63;background:#0b1220;color:#fff}
@@ -35,8 +39,8 @@
     .ok{background:#59d38a;color:#000}
 
     /* ✅ 예상마진(PnL) 텍스트 색상 */
-    .pnLPlus { color:#ff4d4d; }  /* 수익=빨강 */
-    .pnLMinus{ color:#4d79ff; }  /* 손실=파랑 */
+    .pnLPlus { color:#ff4d4d; }
+    .pnLMinus{ color:#4d79ff; }
 
     /* Watchlist drawer */
     .drawer{position:fixed;inset:0;display:none}
@@ -49,30 +53,53 @@
     .item code{flex:1}
     .xbtn{background:#2b3550;border:1px solid #3c4b75;color:#fff;border-radius:10px;padding:6px 8px;cursor:pointer}
 
-   /* ✅ RSI 표시(오른쪽) - 현재가 라인 옆 고정 */
+    /* ✅ RSI 표시(오른쪽) */
     .rsiBox{
       position:absolute;
       right:12px;
-      top:92px;               /* ✅ 여기서 위로 올림(핵심) */
+      top:92px;
       text-align:right;
       line-height:1.9;
       font-weight:900;
       color:#d7b35a;
-      text-shadow:0 0 0.4px rgba(0,0,0,.4);
       user-select:none;
-}
+    }
+    @media (max-width: 640px){
+      .rsiBox{ top:102px; }
+    }
 
-/* ✅ 모바일에서는 글자/줄바꿈 때문에 살짝 더 내림 */
-@media (max-width: 640px){
-  .rsiBox{ top:102px; }
-}
-
-   
-    /* 상단 컨트롤 */
+    /* ✅ 상단 컨트롤 */
     .ctrl{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
     .ctrl label{margin:0;font-size:12px;opacity:.85}
     .ctrl select,.ctrl input{width:auto;min-width:86px;padding:6px 8px;border-radius:10px}
     .iconBtn{display:flex;align-items:center;gap:6px}
+
+    /* =========================
+       🔕 점멸/깜빡임 제거 (애니메이션 없음)
+       ========================= */
+    .blinkBlue, .blinkRed, .blink, .flash, .pulse { animation:none !important; }
+    * { transition: none !important; }
+
+    /* =========================
+       ✅ 컨펌 시각화(깜빡임 없음)
+       ========================= */
+    .card.confirmViz{
+      border-color: #ff4d4d !important;
+      box-shadow: 0 0 0 2px rgba(255,77,77,.35), 0 0 18px rgba(255,77,77,.18) !important;
+    }
+    .card .confirmBadge{
+      position:absolute;
+      top:10px;
+      right:10px;
+      padding:6px 10px;
+      border-radius:999px;
+      font-size:12px;
+      font-weight:900;
+      background:#ff4d4d;
+      color:#fff;
+      display:none;
+    }
+    .card.confirmViz .confirmBadge{ display:inline-block; }
   </style>
 </head>
 <body>
