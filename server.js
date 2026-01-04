@@ -25,7 +25,7 @@ function mexcContractSymbol(sym) {
   const s = String(sym || "").trim().toUpperCase();
   if (!s) return "";
   if (s.includes("_")) return s;
-  if (s.endsWith("USDT")) return s.replace(/USDT$/, "_USDT"); // BTCUSDT -> BTC_USDT
+  if (s.endsWith("USDT")) return s.replace(/USDT$/, "_USDT");
   return s;
 }
 
@@ -38,7 +38,25 @@ async function fetchJson(url) {
   return json;
 }
 
-// ====== MEXC Futures Ticker (USDT-M) ======
+function normalizeMaInterval(q) {
+  const v = String(q || "Min15").trim();
+  const allow = new Set(["Min1","Min3","Min5","Min10","Min15","Min30"]);
+  return allow.has(v) ? v : "Min15";
+}
+
+function intervalToSeconds(interval) {
+  const map = {
+    Min1: 60,
+    Min3: 180,
+    Min5: 300,
+    Min10: 600,
+    Min15: 900,
+    Min30: 1800
+  };
+  return map[interval] || 900;
+}
+
+// ====== MEXC Futures Ticker ======
 async function fetchTicker(sym) {
   const msym = mexcContractSymbol(sym);
   const key = `ticker:${msym}`;
@@ -55,31 +73,30 @@ async function fetchTicker(sym) {
 
   if (!Number.isFinite(fair)) throw new Error("fair invalid");
 
-  const out = {
-    symbol: msym,
-    last,
-    fair,
-    index: Number.isFinite(index) ? index : null,
-    ts: Date.now()
-  };
-  setCache(key, out, 2000); // 2초 캐시(현재가)
+  const out = { symbol: msym, last, fair, index: Number.isFinite(index) ? index : null, ts: Date.now() };
+  setCache(key, out, 2000);
   return out;
 }
 
-// ====== MA30 (15분봉 기준) ======
-async function fetchMA30_15m(sym) {
+// ✅ MA30 (분봉 interval 기준)
+async function fetchMA30(sym, interval) {
   const msym = mexcContractSymbol(sym);
-  const key = `ma30_15m:${msym}`;
+  const iv = normalizeMaInterval(interval);
+
+  const key = `ma30:${msym}:${iv}`;
   const cached = getCache(key);
   if (cached) return cached;
 
-  // 15분봉 30개 = 7.5시간 → 2일 범위면 충분
+  const secPer = intervalToSeconds(iv);
+  // 30개 캔들 + 여유 50개 정도 확보
+  const needSec = secPer * 80;
+
   const nowSec = Math.floor(Date.now() / 1000);
-  const startSec = nowSec - 2 * 24 * 60 * 60;
+  const startSec = nowSec - needSec;
 
   const url =
     `https://contract.mexc.com/api/v1/contract/kline/${encodeURIComponent(msym)}` +
-    `?interval=Min15&start=${startSec}&end=${nowSec}`;
+    `?interval=${encodeURIComponent(iv)}&start=${startSec}&end=${nowSec}`;
 
   const json = await fetchJson(url);
   if (!json?.success || !json.data?.close) throw new Error("kline fail");
@@ -90,22 +107,18 @@ async function fetchMA30_15m(sym) {
   const last30 = closes.slice(-30);
   const ma30 = last30.reduce((a, b) => a + b, 0) / 30;
 
-  const out = { symbol: msym, ma30, ts: Date.now() };
-  setCache(key, out, 10 * 1000); // 10초 캐시
+  const out = { symbol: msym, ma30, interval: iv, ts: Date.now() };
+  // 분봉은 너무 자주 바뀌니까 5~10초 캐시
+  setCache(key, out, 8 * 1000);
   return out;
 }
 
-// ====== API ======
-app.get("/api/health", (req, res) => res.json({ ok: true }));
-
-// ✅ 공용 KLINE (분봉/일봉) close 제공
-// 예: /api/kline?symbol=WLD_USDT&interval=Min15&days=7
+// ✅ 공용 KLINE close 제공 (RSI 등)
 app.get("/api/kline", async (req, res) => {
   try {
     const symbol = String(req.query.symbol || "").trim();
-    const interval = String(req.query.interval || "Day1").trim(); // Day1, Min1, Min5, Min15, Min60...
+    const interval = String(req.query.interval || "Day1").trim();
     const days = Math.min(120, Math.max(1, Number(req.query.days || 7)));
-
     if (!symbol) return res.status(400).json({ error: "symbol required" });
 
     const msym = mexcContractSymbol(symbol);
@@ -127,21 +140,24 @@ app.get("/api/kline", async (req, res) => {
     if (close.length < 30) return res.status(502).json({ error: "not enough closes" });
 
     const out = { symbol: msym, interval, close, ts: Date.now() };
-    setCache(key, out, interval.startsWith("Min") ? 10 * 1000 : 30 * 1000);
+    setCache(key, interval.startsWith("Min") ? 10 * 1000 : 30 * 1000);
     return res.json(out);
   } catch (e) {
     return res.status(500).json({ error: String(e?.message || e) });
   }
 });
 
-// 단일: /api/quote?symbol=BTCUSDT
+// ====== API ======
+app.get("/api/health", (req, res) => res.json({ ok: true }));
+
+// 단일: /api/quote?symbol=WLDUSDT&ma_interval=Min15
 app.get("/api/quote", async (req, res) => {
   try {
     const sym = String(req.query.symbol || "BTCUSDT");
-    const t = await fetchTicker(sym);
+    const maInterval = normalizeMaInterval(req.query.ma_interval);
 
-    // ✅ MA30은 15분봉 기준
-    const m = await fetchMA30_15m(sym);
+    const t = await fetchTicker(sym);
+    const m = await fetchMA30(sym, maInterval);
 
     res.json({
       symbol: t.symbol,
@@ -150,28 +166,27 @@ app.get("/api/quote", async (req, res) => {
       index: t.index,
       ma30: m.ma30,
       ma30_ts: m.ts,
-      price_ts: t.ts,
-      ma30_interval: "Min15"
+      ma30_interval: m.interval,
+      price_ts: t.ts
     });
   } catch (e) {
     res.status(500).json({ error: String(e?.message || e) });
   }
 });
 
-// 배치: /api/quote_batch?symbols=BTCUSDT,ETHUSDT,COREUSDT
+// 배치: /api/quote_batch?symbols=...&ma_interval=Min15
 app.get("/api/quote_batch", async (req, res) => {
   try {
     const symbols = String(req.query.symbols || "BTCUSDT")
       .split(",").map(s => s.trim()).filter(Boolean);
 
+    const maInterval = normalizeMaInterval(req.query.ma_interval);
+
     const results = [];
     for (const sym of symbols) {
       try {
         const t = await fetchTicker(sym);
-
-        // ✅ MA30은 15분봉 기준
-        const m = await fetchMA30_15m(sym);
-
+        const m = await fetchMA30(sym, maInterval);
         results.push({
           symbol: t.symbol,
           fair: t.fair,
@@ -179,15 +194,15 @@ app.get("/api/quote_batch", async (req, res) => {
           index: t.index,
           ma30: m.ma30,
           ma30_ts: m.ts,
-          price_ts: t.ts,
-          ma30_interval: "Min15"
+          ma30_interval: m.interval,
+          price_ts: t.ts
         });
       } catch (e) {
         results.push({ symbol: mexcContractSymbol(sym), error: String(e?.message || e) });
       }
     }
 
-    res.json({ results });
+    res.json({ results, ma_interval: maInterval });
   } catch (e) {
     res.status(500).json({ error: String(e?.message || e) });
   }
