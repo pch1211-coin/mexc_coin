@@ -1,20 +1,28 @@
 // ====== Config ======
 const TREND_BAND_PCT = 0.3;
-const REFRESH_MS = 3000;       // 현재가 갱신 주기(서버 캐시 2초)
-const MA30_TTL_NOTE = "MA30는 서버에서 5분 캐시";
+const REFRESH_MS = 3000;
+const MA30_TTL_NOTE = "MA30는 서버에서 캐시";
 
-// ✅ RSI는 MEXC 차트와 동일한 15분봉 기준
+// RSI는 MEXC 차트와 동일한 15분봉 기준(원하면 이것도 드롭다운으로 확장 가능)
 const RSI_INTERVAL = "Min15";
-const RSI_DAYS = 7; // 15분봉 RSI(24) 계산용 충분 캔들 확보
+const RSI_DAYS = 7;
 
 const DEFAULT_WATCHLIST = [
   "BTCUSDT","ETHUSDT","COREUSDT","WLDUSDT","PIUSDT","DOGEUSDT","XRPUSDT","TRXUSDT"
 ];
 
 const LEV_OPTIONS = [1,3,5,10,15,20,25,30,35,40,45,50];
-
-// 슬롯 개수: 모바일 6 / PC 12
 const SLOT_COUNT = 12;
+
+// ✅ MA30 interval 드롭다운 옵션
+const MA_INTERVAL_OPTIONS = [
+  { v:"Min1",  label:"1분"  },
+  { v:"Min3",  label:"3분"  },
+  { v:"Min5",  label:"5분"  },
+  { v:"Min10", label:"10분" },
+  { v:"Min15", label:"15분" },
+  { v:"Min30", label:"30분" }
+];
 
 // ====== Storage ======
 function loadJSON(key, fallback) {
@@ -22,11 +30,14 @@ function loadJSON(key, fallback) {
 }
 function saveJSON(key, val) { localStorage.setItem(key, JSON.stringify(val)); }
 
-function normSymForUI(s) {
-  return String(s || "").trim().toUpperCase();
+function loadStr(key, fallback) {
+  const v = localStorage.getItem(key);
+  return v == null ? fallback : String(v);
 }
+function saveStr(key, val) { localStorage.setItem(key, String(val)); }
 
-// 선물 심볼 표준화
+function normSymForUI(s) { return String(s || "").trim().toUpperCase(); }
+
 function toContractSym(sym) {
   const s = normSymForUI(sym);
   if (!s) return "";
@@ -68,6 +79,10 @@ function saveAll() {
   saveJSON("inputsMap", inputsMap);
 }
 
+// ✅ 선택된 MA interval
+let maInterval = loadStr("ma_interval", "Min15");
+if (!MA_INTERVAL_OPTIONS.some(o => o.v === maInterval)) maInterval = "Min15";
+
 // ====== Calculations ======
 function calcTrend(price, ma30, prevTrend) {
   if (!price || !ma30) return "NONE";
@@ -98,15 +113,17 @@ function fmt(n, d=6) {
 const grid = document.getElementById("grid");
 const syncInfo = document.getElementById("syncInfo");
 
+// header buttons
+const btnWatch = document.getElementById("btnWatch");
+const btnReset = document.getElementById("btnReset");
+
 // drawer
 const drawer = document.getElementById("drawer");
-const btnWatch = document.getElementById("btnWatch");
 const btnClose = document.getElementById("btnClose");
 const backdrop = document.getElementById("backdrop");
 const wlInput = document.getElementById("wlInput");
 const wlAdd = document.getElementById("wlAdd");
 const wlList = document.getElementById("wlList");
-const btnReset = document.getElementById("btnReset");
 
 btnWatch.onclick = () => { drawer.classList.add("open"); renderWatchlist(); };
 btnClose.onclick = () => drawer.classList.remove("open");
@@ -127,6 +144,47 @@ btnReset.onclick = () => {
   saveAll();
   renderAll();
 };
+
+// ✅ 헤더에 MA30 시간 드롭다운 추가(자동)
+function ensureMaDropdown() {
+  const header = document.querySelector("header");
+  if (!header) return;
+
+  if (document.getElementById("maIntervalSel")) return;
+
+  const wrap = document.createElement("div");
+  wrap.style.display = "flex";
+  wrap.style.gap = "6px";
+  wrap.style.alignItems = "center";
+
+  const label = document.createElement("span");
+  label.className = "muted";
+  label.textContent = "MA30:";
+
+  const sel = document.createElement("select");
+  sel.id = "maIntervalSel";
+  sel.className = "btn";
+  sel.style.padding = "6px 10px";
+  sel.style.borderRadius = "10px";
+
+  sel.innerHTML = MA_INTERVAL_OPTIONS.map(o => {
+    const s = o.v === maInterval ? "selected" : "";
+    return `<option value="${o.v}" ${s}>${o.label}</option>`;
+  }).join("");
+
+  sel.onchange = (e) => {
+    maInterval = String(e.target.value);
+    saveStr("ma_interval", maInterval);
+    refresh(); // 즉시 반영
+  };
+
+  wrap.appendChild(label);
+  wrap.appendChild(sel);
+
+  // syncInfo 앞에 넣기
+  header.insertBefore(wrap, syncInfo);
+}
+ensureMaDropdown();
 
 function renderWatchlist() {
   wlList.innerHTML = "";
@@ -173,7 +231,6 @@ function renderCard(slotIndex) {
     <label>심볼 (와치리스트 드롭다운)</label>
     <select id="sym_${slotIndex}">${options}</select>
 
-    <!-- 현재가/MA30 왼쪽 + RSI(6/12/24) 오른쪽 -->
     <div class="priceWrap">
       <div>
         <div class="big" id="price_${slotIndex}">현재가(Fair): -</div>
@@ -232,7 +289,6 @@ function renderCard(slotIndex) {
     </div>
   `;
 
-  // handlers
   card.querySelector(`#sym_${slotIndex}`).onchange = (e) => {
     slots[slotIndex] = normSymForUI(e.target.value);
     saveAll();
@@ -275,9 +331,7 @@ function renderCard(slotIndex) {
 
 function renderAll() {
   grid.innerHTML = "";
-  for (let i = 0; i < SLOT_COUNT; i++) {
-    grid.appendChild(renderCard(i));
-  }
+  for (let i = 0; i < SLOT_COUNT; i++) grid.appendChild(renderCard(i));
 }
 renderAll();
 
@@ -285,7 +339,11 @@ renderAll();
 async function refresh() {
   try {
     const uniqSyms = [...new Set(slots.map(normSymForUI).filter(Boolean))];
-    const qs = new URLSearchParams({ symbols: uniqSyms.join(",") });
+    const qs = new URLSearchParams({
+      symbols: uniqSyms.join(","),
+      ma_interval: maInterval
+    });
+
     const res = await fetch(`/api/quote_batch?${qs.toString()}`);
     const json = await res.json();
     if (!res.ok) throw new Error(json?.error || "API error");
@@ -294,7 +352,8 @@ async function refresh() {
     (json.results || []).forEach(r => map.set(normSymForUI(r.symbol), r));
 
     const now = new Date();
-    syncInfo.textContent = `갱신: ${now.toLocaleTimeString()} / ${MA30_TTL_NOTE}`;
+    const maText = MA_INTERVAL_OPTIONS.find(o => o.v === maInterval)?.label || maInterval;
+    syncInfo.textContent = `갱신: ${now.toLocaleTimeString()} / MA30(${maText}) / ${MA30_TTL_NOTE}`;
 
     for (let i = 0; i < SLOT_COUNT; i++) {
       const symUI = normSymForUI(slots[i]);
@@ -341,14 +400,12 @@ async function refresh() {
       const ma30 = Number(q.ma30);
 
       priceEl.textContent = `현재가(Fair): ${fmt(price, 6)}`;
-      maEl.textContent = `MA30: ${fmt(ma30, 6)}`;
+      maEl.textContent = `MA30: ${fmt(ma30, 6)} (${MA_INTERVAL_OPTIONS.find(o=>o.v===maInterval)?.label || maInterval})`;
 
-      // 트렌드
       const t = calcTrend(price, ma30, null);
       trendEl.className = `pill ${t==="UP"?"up":t==="DOWN"?"down":"neutral"}`;
       trendEl.textContent = `트렌드: ${t==="UP"?"상승":t==="DOWN"?"하락":"중립"}`;
 
-      // 추천
       let reco = "대기";
       if (t === "UP") reco = "LONG 진입 추천";
       if (t === "DOWN") reco = "SHORT 진입 추천";
@@ -360,7 +417,6 @@ async function refresh() {
       recoEl.className = `pill ${reco.includes("오류")?"hit":reco.includes("⚠")?"warn":reco.includes("추천")?"ok":"neutral"}`;
       recoEl.textContent = `추천: ${reco}`;
 
-      // TP/SL
       const longTP = entry ? entry * (1 + tpPct/100) : null;
       const longSL = entry ? entry * (1 - slPct/100) : null;
       const shortTP = entry ? entry * (1 - tpPct/100) : null;
@@ -371,7 +427,6 @@ async function refresh() {
       document.getElementById(`stp_${i}`).textContent = entry ? fmt(shortTP, 6) : "-";
       document.getElementById(`ssl_${i}`).textContent = entry ? fmt(shortSL, 6) : "-";
 
-      // 상태(근접/터치)
       let status = "";
       if (entry && chk.ok) {
         const tp = (side==="SHORT") ? shortTP : longTP;
@@ -393,7 +448,6 @@ async function refresh() {
       statusEl.className = `pill ${status.includes("터치")?"hit":status.includes("근접")?"warn":"neutral"}`;
       statusEl.textContent = `상태: ${status || "-"}`;
 
-      // PnL/ROI
       let pnl = null, roi = null;
       if (entry && margin > 0) {
         const size = margin * lev;
@@ -409,12 +463,16 @@ async function refresh() {
       roiEl.textContent = roi===null ? "-" : fmt(roi, 4);
 
       pnlEl.classList.remove("pnLPlus", "pnLMinus");
-      if (pnl !== null && isFinite(pnl)) {
-        pnlEl.classList.add(pnl >= 0 ? "pnLPlus" : "pnLMinus");
-      }
+      if (pnl !== null && isFinite(pnl)) pnlEl.classList.add(pnl >= 0 ? "pnLPlus" : "pnLMinus");
 
       metaEl.textContent =
-        `심볼: ${symC} / 레버리지: ${lev}x / Size=마진×레버리지 / price_ts=${new Date(q.price_ts).toLocaleTimeString()}`;
+        `심볼: ${symC} / 레버리지: ${lev}x / MA30=${maInterval} / price_ts=${new Date(q.price_ts).toLocaleTimeString()}`;
+
+      // RSI 표시(캐시 반영)
+      const c = _rsiCache.get(symUI);
+      if (rsi6El)  rsi6El.textContent  = c && Number.isFinite(c.rsi6)  ? c.rsi6.toFixed(2)  : "-";
+      if (rsi12El) rsi12El.textContent = c && Number.isFinite(c.rsi12) ? c.rsi12.toFixed(2) : "-";
+      if (rsi24El) rsi24El.textContent = c && Number.isFinite(c.rsi24) ? c.rsi24.toFixed(2) : "-";
     }
   } catch (e) {
     syncInfo.textContent = `갱신 오류: ${String(e?.message || e)}`;
@@ -424,7 +482,7 @@ async function refresh() {
 refresh();
 setInterval(refresh, REFRESH_MS);
 
-// ====== RSI(15분봉) 계산/캐시 ======
+// ====== RSI(15분봉) ======
 function calcRSI_Wilder_(closes, period) {
   const arr = closes.map(Number).filter(v => Number.isFinite(v));
   if (arr.length < period + 2) return NaN;
@@ -451,20 +509,19 @@ function calcRSI_Wilder_(closes, period) {
   return 100 - (100 / (1 + rs));
 }
 
-async function fetchDailyCloses_(symUI) {
+async function fetchKlineCloses_(symUI) {
   const msym = toContractSym(symUI);
   const res = await fetch(
     `/api/kline?symbol=${encodeURIComponent(msym)}&interval=${encodeURIComponent(RSI_INTERVAL)}&days=${encodeURIComponent(RSI_DAYS)}`
   );
   const json = await res.json();
   if (!res.ok) throw new Error(json?.error || "kline api error");
-
   const closes = (json?.close || []).map(Number).filter(v => Number.isFinite(v));
   if (closes.length < 30) throw new Error("not enough closes");
   return closes;
 }
 
-const _rsiCache = new Map(); // sym -> {ts, rsi6,rsi12,rsi24}
+const _rsiCache = new Map();
 const RSI_CACHE_MS = 30 * 1000;
 let _rsiBusy = false;
 
@@ -481,7 +538,7 @@ async function refreshRSI_Once() {
       if (cached && (now - cached.ts) < RSI_CACHE_MS) continue;
 
       try {
-        const closes = await fetchDailyCloses_(sym);
+        const closes = await fetchKlineCloses_(sym);
         const rsi6  = calcRSI_Wilder_(closes, 6);
         const rsi12 = calcRSI_Wilder_(closes, 12);
         const rsi24 = calcRSI_Wilder_(closes, 24);
@@ -490,24 +547,9 @@ async function refreshRSI_Once() {
         _rsiCache.set(sym, { ts: now, rsi6: NaN, rsi12: NaN, rsi24: NaN });
       }
     }
-
-    // 화면 반영
-    for (let i = 0; i < SLOT_COUNT; i++) {
-      const sym = normSymForUI(slots[i]);
-      const c = _rsiCache.get(sym);
-      if (!c) continue;
-      const e6 = document.getElementById(`rsi6_${i}`);
-      const e12 = document.getElementById(`rsi12_${i}`);
-      const e24 = document.getElementById(`rsi24_${i}`);
-      if (e6)  e6.textContent  = Number.isFinite(c.rsi6)  ? c.rsi6.toFixed(2)  : "-";
-      if (e12) e12.textContent = Number.isFinite(c.rsi12) ? c.rsi12.toFixed(2) : "-";
-      if (e24) e24.textContent = Number.isFinite(c.rsi24) ? c.rsi24.toFixed(2) : "-";
-    }
   } finally {
     _rsiBusy = false;
   }
 }
-
-// 최초 + 주기 실행(5초 마다 체크, 실제 호출은 30초 캐시)
 refreshRSI_Once();
 setInterval(refreshRSI_Once, 5000);
