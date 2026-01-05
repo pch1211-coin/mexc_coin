@@ -1,28 +1,36 @@
 // ====== Config ======
 const TREND_BAND_PCT = 0.3;
 const REFRESH_MS = 3000;
+const IND_CACHE_NOTE = "RSI+MA30=60s 캐시";
 
 const DEFAULT_WATCHLIST = [
   "BTCUSDT","ETHUSDT","COREUSDT","WLDUSDT","PIUSDT","DOGEUSDT","XRPUSDT","TRXUSDT"
 ];
-
 const LEV_OPTIONS = [1,3,5,10,15,20,25,30,35,40,45,50];
 const SLOT_COUNT = 12;
 
-// Kline cache (RSI/MA30) - 과호출 방지
-const KLINE_CACHE_TTL_MS = 60 * 1000; // 60초
-
 // ====== Storage ======
-function loadJSON(key, fallback) { try { return JSON.parse(localStorage.getItem(key) || ""); } catch { return fallback; } }
+function loadJSON(key, fallback) {
+  try { return JSON.parse(localStorage.getItem(key) || ""); } catch { return fallback; }
+}
 function saveJSON(key, val) { localStorage.setItem(key, JSON.stringify(val)); }
-function normSymForUI(s) { return String(s || "").trim().toUpperCase(); }
-function toContractSym(sym) {
+
+function normSymForUI(s){ return String(s||"").trim().toUpperCase(); }
+function toContractSym(sym){
   const s = normSymForUI(sym);
   if (!s) return "";
   if (s.includes("_")) return s;
   if (s.endsWith("USDT")) return s.replace(/USDT$/, "_USDT");
   return s;
 }
+
+// ====== Global Settings ======
+let tfMin = Number(loadJSON("tfMin", 15)) || 15;
+let soundOn = loadJSON("soundOn", true);
+let nearShowMin = Number(loadJSON("nearShowMin", 3)) || 3;
+let confirmShowMin = Number(loadJSON("confirmShowMin", 5)) || 5;
+let nearPctGlobal = Number(loadJSON("nearPctGlobal", 0.15)) || 0.15;
+let confirmPctGlobal = Number(loadJSON("confirmPctGlobal", 0.30)) || 0.30;
 
 // ====== State ======
 let watchlist = loadJSON("wl", null);
@@ -38,7 +46,7 @@ if (!Array.isArray(slots) || slots.length !== SLOT_COUNT) {
 }
 
 let inputsMap = loadJSON("inputsMap", {});
-function ensureInputs(sym) {
+function ensureInputs(sym){
   const s = normSymForUI(sym);
   inputsMap[s] ||= {
     margin: 5.8,
@@ -51,11 +59,28 @@ function ensureInputs(sym) {
   };
   return inputsMap[s];
 }
-function saveAll() { saveJSON("wl", watchlist); saveJSON("slots", slots); saveJSON("inputsMap", inputsMap); }
+function saveAll(){
+  saveJSON("wl", watchlist);
+  saveJSON("slots", slots);
+  saveJSON("inputsMap", inputsMap);
+  saveJSON("tfMin", tfMin);
+  saveJSON("soundOn", soundOn);
+  saveJSON("nearShowMin", nearShowMin);
+  saveJSON("confirmShowMin", confirmShowMin);
+  saveJSON("nearPctGlobal", nearPctGlobal);
+  saveJSON("confirmPctGlobal", confirmPctGlobal);
+}
 
-// ====== Calculations ======
-function calcTrend(price, ma30, prevTrend) {
-  if (!isFinite(price) || !isFinite(ma30) || ma30 === 0) return "NONE";
+// ====== Utils ======
+function fmt(n, d=6){
+  const x = Number(n);
+  if (!isFinite(x)) return "-";
+  if (Math.abs(x) >= 1000) return x.toFixed(2);
+  return x.toFixed(d).replace(/0+$/,"").replace(/\.$/,"");
+}
+
+function calcTrend(price, ma30, prevTrend){
+  if (!price || !ma30) return "NONE";
   const upper = ma30 * (1 + TREND_BAND_PCT / 100);
   const lower = ma30 * (1 - TREND_BAND_PCT / 100);
   if (price <= upper && price >= lower) return prevTrend || "NEUTRAL";
@@ -64,116 +89,76 @@ function calcTrend(price, ma30, prevTrend) {
   return prevTrend || "NEUTRAL";
 }
 
-function validateTpSl(tp, sl) {
-  if (!isFinite(tp) || !isFinite(sl)) return { ok: false, msg: "TP/SL 값 오류" };
-  if (tp <= 0 || sl <= 0) return { ok: false, msg: "TP/SL은 0보다 커야 함" };
-  if (tp > 50 || sl > 50) return { ok: false, msg: "TP/SL%가 너무 큼(>50%)" };
+function validateTpSl(tp, sl){
+  if (!isFinite(tp) || !isFinite(sl)) return { ok:false, msg:"TP/SL 값 오류" };
+  if (tp <= 0 || sl <= 0) return { ok:false, msg:"TP/SL은 0보다 커야 함" };
+  if (tp > 50 || sl > 50) return { ok:false, msg:"TP/SL%가 너무 큼(>50%)" };
   const warn = tp < sl * 1.3;
-  return { ok: true, warn, msg: warn ? "권장: 목표수익 ≥ 손절×1.3" : "" };
+  return { ok:true, warn, msg: warn ? "권장: 목표수익 ≥ 손절×1.3" : "" };
 }
 
-function fmt(n, d=6) {
-  const x = Number(n);
-  if (!isFinite(x)) return "-";
-  if (Math.abs(x) >= 1000) return x.toFixed(2);
-  return x.toFixed(d).replace(/0+$/,"").replace(/\.$/,"");
-}
-
-// ====== RSI / MA30 from closes ======
-function calcMA(closes, period) {
-  if (!Array.isArray(closes) || closes.length < period) return null;
-  const arr = closes.slice(-period).map(Number);
-  if (arr.some(v => !isFinite(v))) return null;
-  return arr.reduce((a,b)=>a+b,0) / period;
-}
-function calcRSI(closes, period) {
-  if (!Array.isArray(closes) || closes.length < period + 1) return null;
-  const c = closes.map(Number);
-  if (c.some(v => !isFinite(v))) return null;
-
-  let gain = 0, loss = 0;
-  for (let i = c.length - period; i < c.length; i++) {
-    const diff = c[i] - c[i - 1];
-    if (diff >= 0) gain += diff;
-    else loss -= diff;
-  }
-  if (loss === 0) return 100;
-  const rs = gain / loss;
-  return 100 - (100 / (1 + rs));
-}
-
-// ====== Kline cache ======
-const klineCache = new Map(); // key: `${sym}|${tf}` -> { ts, ma30, r6, r12, r24 }
-
-async function getKlineStats(symContract, tf) {
-  const key = `${symContract}|${tf}`;
-  const hit = klineCache.get(key);
-  if (hit && (Date.now() - hit.ts) < KLINE_CACHE_TTL_MS) return hit;
-
-  const url = `/api/kline?symbol=${encodeURIComponent(symContract)}&interval=${encodeURIComponent(tf)}&days=7`;
-  const r = await fetch(url);
-  const j = await r.json();
-  if (!Array.isArray(j.close)) throw new Error(j?.error || "kline no close");
-
-  const closes = j.close.map(Number).filter(v => isFinite(v));
-  const ma30 = calcMA(closes, 30);
-  const r6 = calcRSI(closes, 6);
-  const r12 = calcRSI(closes, 12);
-  const r24 = calcRSI(closes, 24);
-
-  const out = { ts: Date.now(), ma30, r6, r12, r24 };
-  klineCache.set(key, out);
-  return out;
-}
-
-// ====== Sound / Vibe ======
-let soundOn = loadJSON("soundOn", true);
-function saveSound() { saveJSON("soundOn", soundOn); }
-
-function beep(times=1) {
+// ====== Sound ======
+function beep(times=1){
   if (!soundOn) return;
   const AudioCtx = window.AudioContext || window.webkitAudioContext;
   if (!AudioCtx) return;
-  const ctx = beep._ctx || (beep._ctx = new AudioCtx());
 
+  const ctx = new AudioCtx();
   let t = ctx.currentTime;
-  for (let i=0;i<times;i++) {
+
+  for (let i=0;i<times;i++){
     const o = ctx.createOscillator();
     const g = ctx.createGain();
     o.type = "sine";
     o.frequency.value = 880;
-    g.gain.value = 0.08;
+    g.gain.value = 0.12;
     o.connect(g); g.connect(ctx.destination);
     o.start(t);
-    o.stop(t + 0.12);
-    t += 0.18;
+    o.stop(t + 0.08);
+    t += 0.12;
   }
+  setTimeout(()=>ctx.close().catch(()=>{}), 400);
 }
-function vibrateOnce() { if (navigator.vibrate) navigator.vibrate(200); }
 
-// slotIndex -> { nearUntil, confirmUntil }
-const alertUntil = new Map();
+// ====== Highlight timers ======
+const slotMarks = Array.from({length:SLOT_COUNT}, ()=>({
+  nearUntil: 0,
+  confirmUntil: 0,
+  lastNearKey: "",
+  lastConfirmKey: ""
+}));
 
-// ====== UI ======
+function markNear(i, key){
+  const now = Date.now();
+  const until = now + nearShowMin * 60 * 1000;
+  if (slotMarks[i].lastNearKey !== key){
+    beep(1);
+    slotMarks[i].lastNearKey = key;
+  }
+  slotMarks[i].nearUntil = Math.max(slotMarks[i].nearUntil, until);
+}
+
+function markConfirm(i, key){
+  const now = Date.now();
+  const until = now + confirmShowMin * 60 * 1000;
+  if (slotMarks[i].lastConfirmKey !== key){
+    beep(3);
+    slotMarks[i].lastConfirmKey = key;
+  }
+  slotMarks[i].confirmUntil = Math.max(slotMarks[i].confirmUntil, until);
+}
+
+// ====== UI refs ======
 const grid = document.getElementById("grid");
 const syncInfo = document.getElementById("syncInfo");
 
 // header controls
-const tfSelect = document.getElementById("tfSelect");
-const nearShowMin = document.getElementById("nearShowMin");
-const confirmShowMin = document.getElementById("confirmShowMin");
-const nearPctGlobal = document.getElementById("nearPctGlobal");
-const confirmPctGlobal = document.getElementById("confirmPctGlobal");
-const btnSound = document.getElementById("btnSound");
-const soundTxt = document.getElementById("soundTxt");
-
-soundTxt.textContent = soundOn ? "ON" : "OFF";
-btnSound.onclick = async () => {
-  soundOn = !soundOn;
-  saveSound();
-  soundTxt.textContent = soundOn ? "ON" : "OFF";
-  if (soundOn) beep(1);
-};
+const tfSel = document.getElementById("tfSel");
+const nearShowSel = document.getElementById("nearShowSel");
+const confirmShowSel = document.getElementById("confirmShowSel");
+const nearPctEl = document.getElementById("nearPct");
+const confirmPctEl = document.getElementById("confirmPct");
+const soundBtn = document.getElementById("soundBtn");
 
 // drawer
 const drawer = document.getElementById("drawer");
@@ -185,6 +170,28 @@ const wlAdd = document.getElementById("wlAdd");
 const wlList = document.getElementById("wlList");
 const btnReset = document.getElementById("btnReset");
 
+// init header UI
+tfSel.value = String(tfMin);
+nearShowSel.value = String(nearShowMin);
+confirmShowSel.value = String(confirmShowMin);
+nearPctEl.value = String(nearPctGlobal);
+confirmPctEl.value = String(confirmPctGlobal);
+soundBtn.textContent = soundOn ? "🔊 ON" : "🔇 OFF";
+
+tfSel.onchange = () => { tfMin = Number(tfSel.value)||15; saveAll(); };
+nearShowSel.onchange = () => { nearShowMin = Number(nearShowSel.value)||3; saveAll(); };
+confirmShowSel.onchange = () => { confirmShowMin = Number(confirmShowSel.value)||5; saveAll(); };
+nearPctEl.onchange = () => { nearPctGlobal = Number(nearPctEl.value)||0.15; saveAll(); };
+confirmPctEl.onchange = () => { confirmPctGlobal = Number(confirmPctEl.value)||0.30; saveAll(); };
+
+soundBtn.onclick = async () => {
+  soundOn = !soundOn;
+  soundBtn.textContent = soundOn ? "🔊 ON" : "🔇 OFF";
+  saveAll();
+  if (soundOn) beep(1);
+};
+
+// drawer
 btnWatch.onclick = () => { drawer.classList.add("open"); renderWatchlist(); };
 btnClose.onclick = () => drawer.classList.remove("open");
 backdrop.onclick = () => drawer.classList.remove("open");
@@ -205,9 +212,9 @@ btnReset.onclick = () => {
   renderAll();
 };
 
-function renderWatchlist() {
+function renderWatchlist(){
   wlList.innerHTML = "";
-  watchlist.forEach((sym) => {
+  watchlist.forEach(sym => {
     const row = document.createElement("div");
     row.className = "item";
     row.innerHTML = `<code>${sym}</code><button class="xbtn">삭제</button>`;
@@ -223,64 +230,56 @@ function renderWatchlist() {
   });
 }
 
-function renderCard(slotIndex) {
-  const sym = normSymForUI(slots[slotIndex]);
+function renderCard(i){
+  const sym = normSymForUI(slots[i]);
   const inp = ensureInputs(sym);
 
   const card = document.createElement("div");
   card.className = "card";
-  card.id = `card_${slotIndex}`;
+  card.id = `card_${i}`;
 
-  const options = watchlist.map(s => {
-    const sel = (s === sym) ? "selected" : "";
+  const options = watchlist.map(s=>{
+    const sel = (s===sym)?"selected":"";
     return `<option value="${s}" ${sel}>${s}</option>`;
   }).join("");
 
-  const levOpts = LEV_OPTIONS.map(v => {
-    const sel = Number(inp.leverage) === v ? "selected" : "";
+  const levOpts = LEV_OPTIONS.map(v=>{
+    const sel = Number(inp.leverage)===v?"selected":"";
     return `<option value="${v}" ${sel}>${v}x</option>`;
   }).join("");
 
   card.innerHTML = `
-    <div class="confirmBadge">컨펌</div>
-
     <div class="row">
-      <div class="title">슬롯 ${slotIndex+1}</div>
-      <span class="pill neutral" id="trend_${slotIndex}">트렌드: -</span>
+      <div class="title">슬롯 ${i+1}</div>
+      <span class="pill neutral" id="trend_${i}">트렌드: -</span>
     </div>
 
     <label>심볼 (와치리스트 드롭다운)</label>
-    <select id="sym_${slotIndex}">${options}</select>
+    <select id="sym_${i}">${options}</select>
 
-   <div class="row" style="align-items:flex-start; gap:10px;">
-  <div style="flex:1; min-width:0;">
-    <div class="big" id="price_${slotIndex}">현재가(Fair): -</div>
-    <div class="muted" id="ma30_${slotIndex}">MA30: -</div>
-  </div>
-
-    <div class="rsiBox">
-      RSI(6): <span id="rsi6_${slotIndex}">-</span><br/>
-      RSI(12): <span id="rsi12_${slotIndex}">-</span><br/>
-      RSI(24): <span id="rsi24_${slotIndex}">-</span>
+    <div class="priceRow" style="margin-top:8px">
+      <div class="priceBox">
+        <div class="big" id="price_${i}">현재가(Fair): -</div>
+        <div class="muted" id="ma30_${i}">MA30: -</div>
+      </div>
+      <div class="rsiBox">
+        RSI(6): <span id="rsi6_${i}">-</span><br/>
+        RSI(12): <span id="rsi12_${i}">-</span><br/>
+        RSI(24): <span id="rsi24_${i}">-</span>
+      </div>
     </div>
-  <div class="rsiBox">
-    RSI(6): <span id="rsi6_${slotIndex}">-</span><br/>
-    RSI(12): <span id="rsi12_${slotIndex}">-</span><br/>
-    RSI(24): <span id="rsi24_${slotIndex}">-</span>
-  </div>
-</div>
 
     <label>투자금(USDT)=마진(Margin)</label>
-    <input id="margin_${slotIndex}" type="number" step="0.01" value="${inp.margin}"/>
+    <input id="margin_${i}" type="number" step="0.01" value="${inp.margin}"/>
 
     <label>레버리지</label>
-    <select id="lev_${slotIndex}">${levOpts}</select>
+    <select id="lev_${i}">${levOpts}</select>
 
     <label>진입가(직접입력)</label>
-    <input id="entry_${slotIndex}" type="number" step="0.000001" value="${inp.entry}"/>
+    <input id="entry_${i}" type="number" step="0.000001" value="${inp.entry}"/>
 
     <label>방향(LONG/SHORT)</label>
-    <select id="side_${slotIndex}">
+    <select id="side_${i}">
       <option value="LONG" ${inp.side==="LONG"?"selected":""}>LONG</option>
       <option value="SHORT" ${inp.side==="SHORT"?"selected":""}>SHORT</option>
     </select>
@@ -288,117 +287,105 @@ function renderCard(slotIndex) {
     <div class="row" style="margin-top:8px;gap:8px">
       <div style="flex:1">
         <label>목표수익(%)</label>
-        <input id="tp_${slotIndex}" type="number" step="0.1" value="${inp.tp_pct}"/>
+        <input id="tp_${i}" type="number" step="0.1" value="${inp.tp_pct}"/>
       </div>
       <div style="flex:1">
         <label>손절(%)</label>
-        <input id="sl_${slotIndex}" type="number" step="0.1" value="${inp.sl_pct}"/>
+        <input id="sl_${i}" type="number" step="0.1" value="${inp.sl_pct}"/>
       </div>
     </div>
 
     <label>근접기준(%)</label>
-    <input id="near_${slotIndex}" type="number" step="0.1" value="${inp.near_pct}"/>
+    <input id="near_${i}" type="number" step="0.1" value="${inp.near_pct}"/>
 
     <div style="margin-top:10px" class="row">
-      <span class="pill neutral" id="status_${slotIndex}">상태: -</span>
-      <span class="pill neutral" id="reco_${slotIndex}">추천: -</span>
+      <span class="pill neutral" id="status_${i}">상태: -</span>
+      <span class="pill neutral" id="reco_${i}">추천: -</span>
     </div>
 
     <div style="margin-top:10px">
-      <div>Long TP: <b id="ltp_${slotIndex}">-</b> / Long SL: <b id="lsl_${slotIndex}">-</b></div>
-      <div>Short TP: <b id="stp_${slotIndex}">-</b> / Short SL: <b id="ssl_${slotIndex}">-</b></div>
+      <div>Long TP: <b id="ltp_${i}">-</b> / Long SL: <b id="lsl_${i}">-</b></div>
+      <div>Short TP: <b id="stp_${i}">-</b> / Short SL: <b id="ssl_${i}">-</b></div>
     </div>
 
     <div style="margin-top:10px">
-      <div>예상마진(PnL USDT): <b id="pnl_${slotIndex}" class="pnl">-</b></div>
-      <div>ROI(%): <b id="roi_${slotIndex}">-</b></div>
-      <div class="muted" id="meta_${slotIndex}">—</div>
+      <div>예상마진(PnL USDT): <b id="pnl_${i}" class="pnl">-</b></div>
+      <div>ROI(%): <b id="roi_${i}">-</b></div>
+      <div class="muted" id="meta_${i}">—</div>
     </div>
   `;
 
-  card.querySelector(`#sym_${slotIndex}`).onchange = (e) => {
-    slots[slotIndex] = normSymForUI(e.target.value);
+  // handlers
+  card.querySelector(`#sym_${i}`).onchange = (e)=>{
+    slots[i] = normSymForUI(e.target.value);
     saveAll();
     renderAll();
   };
 
-  const bindNum = (id, key) => {
-    card.querySelector(id).onchange = (e) => {
+  const bindNum = (id,key)=>{
+    card.querySelector(id).onchange = (e)=>{
       const s = ensureInputs(sym);
       s[key] = Number(e.target.value);
-      inputsMap[sym] = s;
+      inputsMap[sym]=s;
       saveAll();
     };
   };
-  const bindStr = (id, key) => {
-    card.querySelector(id).onchange = (e) => {
+  const bindStr = (id,key)=>{
+    card.querySelector(id).onchange = (e)=>{
       const s = ensureInputs(sym);
       s[key] = String(e.target.value).toUpperCase();
-      inputsMap[sym] = s;
+      inputsMap[sym]=s;
       saveAll();
     };
   };
 
-  bindNum(`#margin_${slotIndex}`, "margin");
-  bindNum(`#entry_${slotIndex}`, "entry");
-  bindNum(`#tp_${slotIndex}`, "tp_pct");
-  bindNum(`#sl_${slotIndex}`, "sl_pct");
-  bindNum(`#near_${slotIndex}`, "near_pct");
+  bindNum(`#margin_${i}`,"margin");
+  bindNum(`#entry_${i}`,"entry");
+  bindNum(`#tp_${i}`,"tp_pct");
+  bindNum(`#sl_${i}`,"sl_pct");
+  bindNum(`#near_${i}`,"near_pct");
 
-  card.querySelector(`#lev_${slotIndex}`).onchange = (e) => {
-    const s = ensureInputs(sym);
+  card.querySelector(`#lev_${i}`).onchange = (e)=>{
+    const s=ensureInputs(sym);
     s.leverage = Number(e.target.value);
-    inputsMap[sym] = s;
+    inputsMap[sym]=s;
     saveAll();
   };
-  bindStr(`#side_${slotIndex}`, "side");
+  bindStr(`#side_${i}`,"side");
 
   return card;
 }
 
-function renderAll() {
+function renderAll(){
   grid.innerHTML = "";
-  for (let i = 0; i < SLOT_COUNT; i++) grid.appendChild(renderCard(i));
+  for(let i=0;i<SLOT_COUNT;i++){
+    grid.appendChild(renderCard(i));
+  }
 }
 renderAll();
 
 // ====== Live refresh ======
-async function refresh() {
-  try {
+async function refresh(){
+  try{
     const uniqSyms = [...new Set(slots.map(normSymForUI).filter(Boolean))];
-    const qs = new URLSearchParams({ symbols: uniqSyms.join(",") });
+    const qs = new URLSearchParams({ symbols: uniqSyms.join(","), tf: String(tfMin) });
 
     const res = await fetch(`/api/quote_batch?${qs.toString()}`);
     const json = await res.json();
-    if (!res.ok) throw new Error(json?.error || "API error");
+    if(!res.ok) throw new Error(json?.error || "API error");
 
     const map = new Map();
-    (json.results || []).forEach(r => map.set(normSymForUI(r.symbol), r));
-
-    const tf = tfSelect.value; // Min5/Min15/Min30
-    const nearShowMs = Number(nearShowMin.value) * 60 * 1000;
-    const confirmShowMs = Number(confirmShowMin.value) * 60 * 1000;
-    const nearPctG = Math.max(0, Number(nearPctGlobal.value) || 0.15);
-    const confirmPctG = Math.max(0, Number(confirmPctGlobal.value) || 0.30);
+    (json.results||[]).forEach(r=>map.set(normSymForUI(r.symbol), r));
 
     const now = new Date();
-    syncInfo.textContent = `갱신: ${now.toLocaleTimeString()} / TF=${tf} / RSI·MA30=${KLINE_CACHE_TTL_MS/1000}s 캐시`;
+    syncInfo.textContent = `갱신: ${now.toLocaleTimeString()} / TF=Min${tfMin} / ${IND_CACHE_NOTE}`;
 
-    for (let i = 0; i < SLOT_COUNT; i++) {
+    for(let i=0;i<SLOT_COUNT;i++){
       const symUI = normSymForUI(slots[i]);
       const symC = toContractSym(symUI);
-
       const q = map.get(symC) || map.get(symUI) || null;
 
-      const inp = ensureInputs(symUI);
-      const margin = Number(inp.margin) || 0;
-      const lev = Math.max(1, Number(inp.leverage) || 1);
-      const entry = Number(inp.entry) || 0;
-      const side = String(inp.side || "LONG").toUpperCase();
-      const tpPct = Number(inp.tp_pct) || 1.5;
-      const slPct = Number(inp.sl_pct) || 0.7;
-      const nearPct = Number(inp.near_pct) || 0.5;
-
+      const card = document.getElementById(`card_${i}`);
       const priceEl = document.getElementById(`price_${i}`);
       const maEl = document.getElementById(`ma30_${i}`);
       const trendEl = document.getElementById(`trend_${i}`);
@@ -410,17 +397,16 @@ async function refresh() {
       const r12El = document.getElementById(`rsi12_${i}`);
       const r24El = document.getElementById(`rsi24_${i}`);
 
-      const cardEl = document.getElementById(`card_${i}`);
+      // highlight reset (시간 지나면 자동 해제)
+      const nowMs = Date.now();
+      card.classList.remove("near","confirm","long","short");
+      if (slotMarks[i].nearUntil > nowMs) card.classList.add("near");
+      if (slotMarks[i].confirmUntil > nowMs) {
+        card.classList.add("confirm");
+        // 마지막 컨펌 방향은 status에서 결정되도록 아래에서 다시 세팅
+      }
 
-      // 현재 상태 유지용 타이머
-      const au = alertUntil.get(i) || { nearUntil: 0, confirmUntil: 0 };
-      const nowTs = Date.now();
-
-      // ✅ 컨펌 시각화(깜빡임 없음)
-      cardEl.classList.remove("confirmViz");
-      if (au.confirmUntil > nowTs) cardEl.classList.add("confirmViz");
-
-      if (!q || q.error || !isFinite(q.fair)) {
+      if(!q || q.error){
         priceEl.textContent = `현재가(Fair): -`;
         maEl.textContent = `MA30: -`;
         trendEl.className = "pill neutral";
@@ -430,121 +416,123 @@ async function refresh() {
         recoEl.className = "pill warn";
         recoEl.textContent = `추천: 오류`;
         metaEl.textContent = q?.error ? `에러: ${q.error}` : "데이터 없음";
+
         r6El.textContent = "ERR";
         r12El.textContent = "ERR";
         r24El.textContent = "ERR";
         continue;
       }
 
+      const inp = ensureInputs(symUI);
+      const margin = Number(inp.margin)||0;
+      const lev = Math.max(1, Number(inp.leverage)||1);
+      const entry = Number(inp.entry)||0;
+      const side = String(inp.side||"LONG").toUpperCase();
+      const tpPct = Number(inp.tp_pct)||1.5;
+      const slPct = Number(inp.sl_pct)||0.7;
+      const nearPct = Number(inp.near_pct)||0.5;
+
       const price = Number(q.fair);
-      priceEl.textContent = `현재가(Fair): ${fmt(price, 6)}`;
+      const ma30 = Number(q.ma30);
 
-      // RSI/MA30 (선택 TF)
-      let ma30 = null;
-      try {
-        const stats = await getKlineStats(symC, tf);
-        ma30 = stats.ma30;
+      priceEl.textContent = `현재가(Fair): ${fmt(price,6)}`;
+      maEl.textContent = `MA30: ${fmt(ma30,6)} (${tfMin}분)`;
 
-        r6El.textContent  = (stats.r6  == null) ? "-" : stats.r6.toFixed(2);
-        r12El.textContent = (stats.r12 == null) ? "-" : stats.r12.toFixed(2);
-        r24El.textContent = (stats.r24 == null) ? "-" : stats.r24.toFixed(2);
+      // RSI (겹침 방지: textContent로만 세팅)
+      r6El.textContent = isFinite(q.rsi6) ? fmt(q.rsi6,2) : "-";
+      r12El.textContent = isFinite(q.rsi12) ? fmt(q.rsi12,2) : "-";
+      r24El.textContent = isFinite(q.rsi24) ? fmt(q.rsi24,2) : "-";
 
-        const tfTxt = (tf==="Min5") ? "5분" : (tf==="Min15") ? "15분" : "30분";
-        maEl.textContent = `MA30: ${ma30==null ? "-" : fmt(ma30, 6)} (${tfTxt})`;
-      } catch (e) {
-        maEl.textContent = `MA30: -`;
-        r6El.textContent = r12El.textContent = r24El.textContent = "ERR";
-      }
-
-      // Trend
+      // Trend pill
       const t = calcTrend(price, ma30, null);
       trendEl.className = `pill ${t==="UP"?"up":t==="DOWN"?"down":"neutral"}`;
       trendEl.textContent = `트렌드: ${t==="UP"?"상승":t==="DOWN"?"하락":"중립"}`;
 
       // Recommend
       let reco = "대기";
-      if (t === "UP") reco = "LONG 진입 추천";
-      if (t === "DOWN") reco = "SHORT 진입 추천";
-      if ((t === "UP" && side === "SHORT") || (t === "DOWN" && side === "LONG")) reco = "비추천(트렌드 반대)";
+      if (t==="UP") reco="LONG 진입 추천";
+      if (t==="DOWN") reco="SHORT 진입 추천";
+      if ((t==="UP" && side==="SHORT") || (t==="DOWN" && side==="LONG")) reco="비추천(트렌드 반대)";
       const chk = validateTpSl(tpPct, slPct);
-      if (!chk.ok) reco = "설정 오류: " + chk.msg;
-      else if (chk.warn) reco = `${reco} / ⚠ ${chk.msg}`;
-
+      if(!chk.ok) reco = "설정 오류: " + chk.msg;
+      else if(chk.warn) reco = `${reco} / ⚠ ${chk.msg}`;
       recoEl.className = `pill ${reco.includes("오류")?"hit":reco.includes("⚠")?"warn":reco.includes("추천")?"ok":"neutral"}`;
       recoEl.textContent = `추천: ${reco}`;
 
-      // TP/SL
-      const longTP = entry ? entry * (1 + tpPct/100) : null;
-      const longSL = entry ? entry * (1 - slPct/100) : null;
-      const shortTP = entry ? entry * (1 - tpPct/100) : null;
-      const shortSL = entry ? entry * (1 + slPct/100) : null;
+      // TP/SL 계산
+      const longTP = entry ? entry*(1+tpPct/100) : null;
+      const longSL = entry ? entry*(1-slPct/100) : null;
+      const shortTP = entry ? entry*(1-tpPct/100) : null;
+      const shortSL = entry ? entry*(1+slPct/100) : null;
 
-      document.getElementById(`ltp_${i}`).textContent = entry ? fmt(longTP, 6) : "-";
-      document.getElementById(`lsl_${i}`).textContent = entry ? fmt(longSL, 6) : "-";
-      document.getElementById(`stp_${i}`).textContent = entry ? fmt(shortTP, 6) : "-";
-      document.getElementById(`ssl_${i}`).textContent = entry ? fmt(shortSL, 6) : "-";
+      document.getElementById(`ltp_${i}`).textContent = entry ? fmt(longTP,6) : "-";
+      document.getElementById(`lsl_${i}`).textContent = entry ? fmt(longSL,6) : "-";
+      document.getElementById(`stp_${i}`).textContent = entry ? fmt(shortTP,6) : "-";
+      document.getElementById(`ssl_${i}`).textContent = entry ? fmt(shortSL,6) : "-";
 
-      // Status (근접/터치)
-      let status = "";
-      if (entry && chk.ok) {
+      // 상태(근접/컨펌) + 표시시간 유지 + 소리
+      let status = "-";
+      let isNear = false;
+      let isConfirm = false;
+
+      if (entry && chk.ok){
         const tp = (side==="SHORT") ? shortTP : longTP;
         const sl = (side==="SHORT") ? shortSL : longSL;
 
-        const nearTP = Math.abs(price - tp) / price * 100 <= nearPct;
-        const nearSL = Math.abs(price - sl) / price * 100 <= nearPct;
+        // 근접(%) 기준
+        const nearTP = Math.abs(price - tp)/price*100 <= nearPct;
+        const nearSL = Math.abs(price - sl)/price*100 <= nearPct;
 
+        // 컨펌(%) 기준(더 넓은 ‘확정’ 영역)
+        const confTP = Math.abs(price - tp)/price*100 <= confirmPctGlobal;
+        const confSL = Math.abs(price - sl)/price*100 <= confirmPctGlobal;
+
+        // 실제 터치/돌파
         let hitTP=false, hitSL=false;
-        if (side === "LONG") { hitTP = price >= tp; hitSL = price <= sl; }
+        if (side==="LONG"){ hitTP = price >= tp; hitSL = price <= sl; }
         else { hitTP = price <= tp; hitSL = price >= sl; }
 
-        if (hitSL) status = `${side} SL 터치/돌파`;
-        else if (hitTP) status = `${side} TP 터치/돌파`;
-        else if (nearSL) status = `${side} SL 근접`;
-        else if (nearTP) status = `${side} TP 근접`;
+        if (hitSL){ status = `${side} SL 컨펌`; isConfirm = true; }
+        else if (hitTP){ status = `${side} TP 컨펌`; isConfirm = true; }
+        else if (confSL){ status = `${side} SL 컨펌근접`; isConfirm = true; }
+        else if (confTP){ status = `${side} TP 컨펌근접`; isConfirm = true; }
+        else if (nearSL){ status = `${side} SL 근접`; isNear = true; }
+        else if (nearTP){ status = `${side} TP 근접`; isNear = true; }
       }
 
-      statusEl.className = `pill ${status.includes("터치")?"hit":status.includes("근접")?"warn":"neutral"}`;
-      statusEl.textContent = `상태: ${status || "-"}`;
+      // UI pill
+      statusEl.className = `pill ${String(status).includes("컨펌")?"hit":String(status).includes("근접")?"warn":"neutral"}`;
+      statusEl.textContent = `상태: ${status}`;
+
+      // mark timers + 테두리 색상
+      if (isNear){
+        markNear(i, `${symC}:${status}`);
+      }
+      if (isConfirm){
+        markConfirm(i, `${symC}:${status}`);
+        card.classList.add("confirm");
+        if (side==="SHORT"){ card.classList.add("short"); card.classList.remove("long"); }
+        else { card.classList.add("long"); card.classList.remove("short"); }
+      }
 
       // PnL/ROI
-      let pnl = null, roi = null;
-      if (entry && margin > 0) {
-        const size = margin * lev;
-        const frac = (side === "SHORT") ? ((entry - price)/entry) : ((price - entry)/entry);
-        pnl = size * frac;
-        roi = (pnl / margin) * 100;
+      let pnl=null, roi=null;
+      if (entry && margin>0){
+        const size = margin*lev;
+        const frac = (side==="SHORT") ? ((entry-price)/entry) : ((price-entry)/entry);
+        pnl = size*frac;
+        roi = (pnl/margin)*100;
       }
-
       const pnlEl = document.getElementById(`pnl_${i}`);
-      pnlEl.textContent = pnl===null ? "-" : fmt(pnl, 6);
-      pnlEl.className = (pnl !== null && pnl >= 0) ? "pnLPlus" : (pnl !== null ? "pnLMinus" : "");
-      document.getElementById(`roi_${i}`).textContent = roi===null ? "-" : fmt(roi, 4);
+      pnlEl.textContent = pnl===null ? "-" : fmt(pnl,6);
+      pnlEl.className = (pnl!==null && pnl>=0) ? "pnLPlus" : "pnLMinus";
+      document.getElementById(`roi_${i}`).textContent = roi===null ? "-" : fmt(roi,4);
 
-      metaEl.textContent = `심볼: ${symC} / 레버리지: ${lev}x / price_ts=${new Date(q.price_ts).toLocaleTimeString()}`;
-
-      // ✅ 근접/컨펌 알림 (price vs MA30 거리%)
-      if (isFinite(ma30) && ma30 > 0) {
-        const distPct = Math.abs(price - ma30) / ma30 * 100;
-
-        // 근접: 화면표시만(여기서는 시각화 없음)
-        if (distPct <= nearPctG) {
-          au.nearUntil = nowTs + nearShowMs;
-        }
-
-        // 컨펌: 소리 3회 + (모바일)진동 + 시각화 유지
-        if (distPct >= confirmPctG) {
-          if (au.confirmUntil <= nowTs) {
-            beep(3);
-            vibrateOnce();
-          }
-          au.confirmUntil = nowTs + confirmShowMs;
-        }
-
-        alertUntil.set(i, au);
-      }
+      metaEl.textContent =
+        `심볼: ${symC} / 레버리지: ${lev}x / price_ts=${new Date(q.price_ts).toLocaleTimeString()} / ind_ts=${new Date(q.ind_ts).toLocaleTimeString()}`;
     }
-  } catch (e) {
-    syncInfo.textContent = `갱신 오류: ${String(e?.message || e)}`;
+  }catch(e){
+    syncInfo.textContent = `갱신 오류: ${String(e?.message||e)}`;
   }
 }
 
