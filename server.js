@@ -1,5 +1,5 @@
 const express = require("express");
-const fetch = require("node-fetch");
+//Node 18+ has global fetch (no node-fetchneebed)
 const path = require("path");
 
 const app = express();
@@ -144,3 +144,4 @@ app.get("/api/quote_batch", async (req, res) => {
 });
 
 app.listen(PORT, () => console.log("✅ Server running:", PORT));
+
