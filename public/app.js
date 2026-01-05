@@ -50,6 +50,20 @@ window.beep = async function beep(times=1) {
 // 첫 사용자 터치로 오디오 잠금 해제(모바일 필수)
 document.addEventListener("pointerdown", () => { ensureAudio(); }, { once: true });
 
+// ✅ 상태 변화 감지(중복 사운드 방지)
+window.__lastStatus ||= {};
+function handleStatusSound_(symKey, statusText) {
+  const prev = window.__lastStatus[symKey] || "";
+  const cur = statusText || "";
+  if (cur !== prev) {
+    // 근접: 1회
+    if (cur.includes("근접")) window.beep(1);
+    // 컨펌(터치/돌파): 3회
+    if (cur.includes("터치") || cur.includes("돌파")) window.beep(3);
+  }
+  window.__lastStatus[symKey] = cur;
+}
+
 // ====== Storage ======
 function loadJSON(key, fallback) {
   try { return JSON.parse(localStorage.getItem(key) || ""); } catch { return fallback; }
@@ -144,8 +158,13 @@ const wlAdd = document.getElementById("wlAdd");
 const wlList = document.getElementById("wlList");
 const btnReset = document.getElementById("btnReset");
 
-// (있으면) 스피커 버튼도 자동 연결
-const btnSpeaker = document.getElementById("btnSpeaker") || document.getElementById("btnSound") || null;
+// ✅ (있으면) 스피커 버튼도 자동 연결 (soundBtn 포함)
+const btnSpeaker =
+  document.getElementById("btnSpeaker") ||
+  document.getElementById("btnSound") ||
+  document.getElementById("soundBtn") ||
+  null;
+
 if (btnSpeaker) {
   const applyLabel = () => {
     btnSpeaker.textContent = soundOn ? "🔊 ON" : "🔇 OFF";
@@ -155,7 +174,7 @@ if (btnSpeaker) {
     soundOn = !soundOn;
     localStorage.setItem("soundOn", soundOn ? "1" : "0");
     applyLabel();
-    await ensureAudio(); // ✅ 버튼 눌렀을 때 오디오 unlock
+    await ensureAudio();
   };
 }
 
@@ -215,7 +234,6 @@ function renderCard(slotIndex) {
     return `<option value="${v}" ${sel}>${v}x</option>`;
   }).join("");
 
-  // ✅ 가격/지표 영역: 왼쪽(가격/MA/24h), 오른쪽(RSI 3줄)
   card.innerHTML = `
     <div class="row">
       <div class="title">슬롯 ${slotIndex+1}</div>
@@ -288,7 +306,6 @@ function renderCard(slotIndex) {
     </div>
   `;
 
-  // handlers
   card.querySelector(`#sym_${slotIndex}`).onchange = (e) => {
     slots[slotIndex] = normSymForUI(e.target.value);
     saveAll();
@@ -364,6 +381,8 @@ async function refresh() {
       const slPct = Number(inp.sl_pct) || 0.7;
       const nearPct = Number(inp.near_pct) || 0.5;
 
+      const cardEl = document.getElementById(`card_${i}`);
+
       const priceEl = document.getElementById(`price_${i}`);
       const maEl = document.getElementById(`ma30_${i}`);
       const hlEl = document.getElementById(`hl24_${i}`);
@@ -375,6 +394,9 @@ async function refresh() {
       const rsi6El = document.getElementById(`rsi6_${i}`);
       const rsi12El = document.getElementById(`rsi12_${i}`);
       const rsi24El = document.getElementById(`rsi24_${i}`);
+
+      // ✅ 테두리 상태 초기화(깜빡임 없음)
+      if (cardEl) cardEl.classList.remove("near","confirm-long","confirm-short");
 
       if (!q || q.error) {
         priceEl.textContent = `현재가(Fair): -`;
@@ -462,6 +484,24 @@ async function refresh() {
 
       statusEl.className = `pill ${status.includes("터치")?"hit":status.includes("근접")?"warn":"neutral"}`;
       statusEl.textContent = `상태: ${status || "-"}`;
+
+      // ✅ 사운드(중복 방지)
+      handleStatusSound_(symUI, status);
+
+      // ✅ [추가] 슬롯 테두리 시각화(깜빡임 X, 색상만)
+      if (cardEl) {
+        const isNear = status.includes("근접");
+        const isConfirm = status.includes("터치") || status.includes("돌파");
+        if (isConfirm) {
+          // LONG 컨펌=빨강, SHORT 컨펌=파랑
+          cardEl.classList.add(side === "SHORT" ? "confirm-short" : "confirm-long");
+
+          // 모바일 컨펌 시 진동(가능할 때만)
+          try { if (navigator.vibrate) navigator.vibrate([120, 80, 120]); } catch {}
+        } else if (isNear) {
+          cardEl.classList.add("near");
+        }
+      }
 
       // PnL/ROI
       let pnl = null, roi = null;
