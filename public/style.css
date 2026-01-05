@@ -66,3 +66,27 @@ hr { border:none; border-top:1px solid #1f2f52; margin:12px 0; }
   overflow: visible;
   padding-bottom: 16px;
 }
+/* ===== 입력창 / 셀렉트 길이 통일 ===== */
+.card input,
+.card select {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* 숫자 input 화살표 때문에 어긋나는 것 방지 */
+.card input[type="number"] {
+  -moz-appearance: textfield;
+}
+.card input[type="number"]::-webkit-outer-spin-button,
+.card input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* 모바일에서도 동일 폭 유지 */
+@media (max-width: 768px) {
+  .card input,
+  .card select {
+    width: 100%;
+  }
+}
