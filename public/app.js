@@ -268,16 +268,16 @@ function renderCard(i){
    <div class="priceBox">
   <div class="big" id="price_${i}">현재가(Fair): -</div>
   <div class="muted" id="ma30_${i}">MA30: -</div>
+  <div class="muted" id="hl24_${i}">
+    24h High: - / 24h Low: -
+  </div>
 </div>
-        <!-- ✅ 24h High/Low 다시 추가 -->
-        <div class="muted" id="hl24_${i}">24h High: - / 24h Low: -</div>
-      </div>
-      <div class="rsiBox">
-        RSI(6): <span id="rsi6_${i}">-</span><br/>
-        RSI(12): <span id="rsi12_${i}">-</span><br/>
-        RSI(24): <span id="rsi24_${i}">-</span>
-      </div>
-    </div>
+
+<div class="rsiBox">
+  RSI(6): <span id="rsi6_${i}">-</span><br/>
+  RSI(12): <span id="rsi12_${i}">-</span><br/>
+  RSI(24): <span id="rsi24_${i}">-</span>
+</div>
 
     <label>투자금(USDT)=마진(Margin)</label>
     <input id="margin_${i}" type="number" step="0.01" value="${inp.margin}"/>
@@ -563,6 +563,7 @@ async function refresh(){
 
 refresh();
 setInterval(refresh, REFRESH_MS);
+
 
 
 
