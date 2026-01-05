@@ -1,14 +1,16 @@
+기존 server
+
+
+
 const express = require("express");
-const fetch = require("node-fetch");
 const path = require("path");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ✅ Cloudflare Worker 프록시를 쓰면 여기로 설정
-// Render 환경변수: MEXC_BASE = https://mexc-proxy.pch1211.workers.dev
-const RAW_BASE = process.env.MEXC_BASE || "https://contract.mexc.com";
-const MEXC_BASE = String(RAW_BASE).replace(/\/+$/, "");
+// ✅ Cloudflare Worker 프록시
+// 예) https://mexc-proxy.pch1211.workers.dev
+const MEXC_BASE = (process.env.MEXC_BASE || "https://contract.mexc.com").replace(/\/+$/,"");
 
 app.use(express.static(path.join(__dirname, "public")));
 
@@ -33,58 +35,30 @@ function mexcContractSymbol(sym) {
   return s;
 }
 
-function toNumOrNull(v) {
-  if (v === null || v === undefined) return null;
-  if (typeof v === "string" && v.trim() === "") return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
+// tf(분) -> MEXC interval
+function tfToInterval(tfMin) {
+  const n = Number(tfMin);
+  if (n === 5) return "Min5";
+  if (n === 10) return "Min10";
+  if (n === 15) return "Min15";
+  if (n === 30) return "Min30";
+  return "Min15";
+}
+
+async function fetchText(url) {
+  const res = await fetch(url, { headers: { "User-Agent": "mexc-dashboard" } });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`HTTP ${res.status} ${text.slice(0,120)}`);
+  return text;
 }
 
 async function fetchJson(url) {
-  const res = await fetch(url, { headers: { "User-Agent": "mexc-coin-dashboard" } });
-  const text = await res.text();
-  let json;
-  try { json = JSON.parse(text); } catch { throw new Error("JSON parse fail"); }
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return json;
+  const text = await fetchText(url);
+  try { return JSON.parse(text); }
+  catch { throw new Error("JSON parse fail"); }
 }
 
-// ====== 24h High/Low fallback by kline (Min15, last ~26h) ======
-async function fetchHighLow24ByKline15m(sym) {
-  const msym = mexcContractSymbol(sym);
-  const key = `hl24_15m:${msym}`;
-  const cached = getCache(key);
-  if (cached) return cached;
-
-  const nowSec = Math.floor(Date.now() / 1000);
-  const startSec = nowSec - 26 * 60 * 60; // 26시간(여유)
-  const url = `${MEXC_BASE}/api/v1/contract/kline/${encodeURIComponent(msym)}?interval=Min15&start=${startSec}&end=${nowSec}`;
-  const json = await fetchJson(url);
-
-  if (!json?.success || !json.data) throw new Error("kline fail");
-  const d = json.data;
-
-  // MEXC kline은 high/low 배열이 오는 경우가 많음
-  const highs = Array.isArray(d.high) ? d.high.map(Number).filter(Number.isFinite) : [];
-  const lows  = Array.isArray(d.low)  ? d.low.map(Number).filter(Number.isFinite)  : [];
-
-  // 없으면 close로라도 계산
-  const closes = Array.isArray(d.close) ? d.close.map(Number).filter(Number.isFinite) : [];
-
-  const hiArr = highs.length ? highs : closes;
-  const loArr = lows.length ? lows : closes;
-
-  if (hiArr.length < 10 || loArr.length < 10) throw new Error("not enough candles");
-
-  const high24 = Math.max(...hiArr);
-  const low24  = Math.min(...loArr);
-
-  const out = { high24, low24, ts: Date.now() };
-  setCache(key, out, 60 * 1000); // 60초 캐시
-  return out;
-}
-
-// ====== Ticker ======
+// ====== MEXC Ticker ======
 async function fetchTicker(sym) {
   const msym = mexcContractSymbol(sym);
   const key = `ticker:${msym}`;
@@ -95,149 +69,123 @@ async function fetchTicker(sym) {
   const json = await fetchJson(url);
   if (!json?.success || !json.data) throw new Error("ticker fail");
 
-  const d = json.data;
-
-  const last = toNumOrNull(d.lastPrice);
-  const fair = toNumOrNull(d.fairPrice ?? d.fair_price ?? last);
-  const index = toNumOrNull(d.indexPrice ?? d.index_price);
-
-  // ticker에서 24h high/low가 오는 경우가 있는데, 키가 제각각이라 넓게 시도
-  const highFromTicker =
-    toNumOrNull(d.high24Price) ?? toNumOrNull(d.high24) ?? toNumOrNull(d.highPrice) ?? toNumOrNull(d.high);
-  const lowFromTicker =
-    toNumOrNull(d.low24Price) ?? toNumOrNull(d.low24) ?? toNumOrNull(d.lowPrice) ?? toNumOrNull(d.low);
+  const last = Number(json.data.lastPrice);
+  const fair = Number(json.data.fairPrice ?? json.data.fair_price ?? last);
+  const index = Number(json.data.indexPrice ?? json.data.index_price ?? NaN);
 
   if (!Number.isFinite(fair)) throw new Error("fair invalid");
 
-  // ✅ ticker low/high가 없거나 0이면 kline으로 계산해서 채움 (확실)
-  let high24 = highFromTicker;
-  let low24 = lowFromTicker;
-
-  if (!(Number.isFinite(high24) && high24 > 0) || !(Number.isFinite(low24) && low24 > 0)) {
-    try {
-      const hl = await fetchHighLow24ByKline15m(msym);
-      if (!(Number.isFinite(high24) && high24 > 0)) high24 = hl.high24;
-      if (!(Number.isFinite(low24) && low24 > 0)) low24 = hl.low24;
-    } catch (e) {
-      // fallback 실패 시 null 유지
-    }
-  }
-
   const out = {
     symbol: msym,
-    last: Number.isFinite(last) ? last : null,
+    last,
     fair,
     index: Number.isFinite(index) ? index : null,
-    high24: Number.isFinite(high24) ? high24 : null,
-    low24: Number.isFinite(low24) ? low24 : null,
     ts: Date.now()
   };
-
   setCache(key, out, 2000); // 2초 캐시
   return out;
 }
 
-// ====== RSI (Wilder) ======
-function calcRSI_Wilder(closes, period) {
-  if (!Array.isArray(closes) || closes.length < period + 2) return null;
+// ====== Kline closes ======
+async function fetchCloses(sym, tfMin, need) {
+  const msym = mexcContractSymbol(sym);
+  const interval = tfToInterval(tfMin);
 
-  let gains = 0, losses = 0;
+  // ✅ RSI 안정화 위해 넉넉히 가져오기
+  const want = Math.max(need + 200, 260);
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  const secPer = Number(tfMin) * 60;
+  const startSec = nowSec - want * secPer;
+
+  const url = `${MEXC_BASE}/api/v1/contract/kline/${encodeURIComponent(msym)}?interval=${interval}&start=${startSec}&end=${nowSec}`;
+  const json = await fetchJson(url);
+
+  if (!json?.success || !json?.data?.close) throw new Error("kline fail");
+
+  let closes = json.data.close.map(Number).filter(v => Number.isFinite(v));
+  if (closes.length < need) throw new Error("not enough candles");
+
+  // ✅ 진행중 봉(마지막 close) 때문에 RSI/MA가 튀는 경우가 많아서 기본으로 1개 제외
+  // (MEXC 차트와 더 잘 맞는 쪽이 대부분 이 설정)
+  ///if (closes.length > need + 5) closes = closes.slice(0, -1);
+
+  if (closes.length < need) throw new Error("not enough candles(after trim)");
+  return closes;
+}
+
+function calcMA(closes, period) {
+  const arr = closes.slice(-period);
+  return arr.reduce((a,b)=>a+b,0)/period;
+}
+
+// ✅ 진짜 Wilder RSI(RMA 스무딩) - MEXC 차트 방식에 가장 근접
+function calcRSI_Wilder(closes, period) {
+  if (!Array.isArray(closes) || closes.length < period + 2) return NaN;
+
+  let gain = 0, loss = 0;
+
+  // 초기 평균(첫 period 구간)
   for (let i = 1; i <= period; i++) {
     const diff = closes[i] - closes[i - 1];
-    if (diff >= 0) gains += diff;
-    else losses += -diff;
+    if (diff >= 0) gain += diff;
+    else loss += -diff;
   }
-  let avgGain = gains / period;
-  let avgLoss = losses / period;
 
+  let avgGain = gain / period;
+  let avgLoss = loss / period;
+
+  // 이후는 Wilder 스무딩: RMA
   for (let i = period + 1; i < closes.length; i++) {
     const diff = closes[i] - closes[i - 1];
-    const gain = diff > 0 ? diff : 0;
-    const loss = diff < 0 ? -diff : 0;
-    avgGain = (avgGain * (period - 1) + gain) / period;
-    avgLoss = (avgLoss * (period - 1) + loss) / period;
+    const g = diff > 0 ? diff : 0;
+    const l = diff < 0 ? -diff : 0;
+
+    avgGain = (avgGain * (period - 1) + g) / period;
+    avgLoss = (avgLoss * (period - 1) + l) / period;
   }
+
   if (avgLoss === 0) return 100;
   const rs = avgGain / avgLoss;
   return 100 - (100 / (1 + rs));
 }
 
-// ====== Kline closes (15분봉) ======
-async function fetchCloses15m(sym) {
+async function fetchIndicators(sym, tfMin) {
   const msym = mexcContractSymbol(sym);
-  const key = `kline15:${msym}`;
+  const key = `ind:${msym}:tf${tfMin}`;
   const cached = getCache(key);
   if (cached) return cached;
 
-  async function loadWindow(days) {
-    const nowSec = Math.floor(Date.now() / 1000);
-    const startSec = nowSec - days * 24 * 60 * 60;
-    const url = `${MEXC_BASE}/api/v1/contract/kline/${encodeURIComponent(msym)}?interval=Min15&start=${startSec}&end=${nowSec}`;
-    const json = await fetchJson(url);
-    if (!json?.success || !json.data?.close) throw new Error("kline fail");
-    return json.data.close.map(Number).filter(Number.isFinite);
-  }
+  // MA30 + RSI24 계산에 충분한 길이 확보
+  const closes = await fetchCloses(msym, tfMin, 60);
 
-  let closes = await loadWindow(10);
-  if (closes.length < 60) closes = await loadWindow(30);
-  if (closes.length < 60) throw new Error("not enough candles");
-
-  setCache(key, closes, 60 * 1000); // 60초 캐시
-  return closes;
-}
-
-// ====== MA30 + RSI(6/12/24) ======
-async function fetchIndicators15m(sym) {
-  const msym = mexcContractSymbol(sym);
-  const key = `ind15:${msym}`;
-  const cached = getCache(key);
-  if (cached) return cached;
-
-  const closes = await fetchCloses15m(msym);
-
-  const last30 = closes.slice(-30);
-  const ma30 = last30.reduce((a, b) => a + b, 0) / 30;
-
+  const ma30 = calcMA(closes, 30);
   const rsi6 = calcRSI_Wilder(closes, 6);
   const rsi12 = calcRSI_Wilder(closes, 12);
   const rsi24 = calcRSI_Wilder(closes, 24);
 
-  const out = { symbol: msym, ma30, rsi6, rsi12, rsi24, ts: Date.now() };
-  setCache(key, out, 60 * 1000); // 60초 캐시
+  const out = {
+    symbol: msym,
+    tf: Number(tfMin),
+    ma30,
+    rsi6,
+    rsi12,
+    rsi24,
+    ts: Date.now()
+  };
+
+  // ✅ 지표는 60초 캐시
+  setCache(key, out, 30 * 1000);
   return out;
 }
 
-// ====== API ======
-app.get("/api/health", (req, res) => res.json({ ok: true, base: MEXC_BASE }));
+// ====== Routes ======
+app.get("/api/health", (req, res) => res.json({ ok: true, mexc_base: MEXC_BASE }));
 
-app.get("/api/quote", async (req, res) => {
-  try {
-    const sym = String(req.query.symbol || "BTCUSDT");
-    const t = await fetchTicker(sym);
-    const ind = await fetchIndicators15m(sym);
-
-    res.json({
-      symbol: t.symbol,
-      fair: t.fair,
-      last: t.last,
-      index: t.index,
-      high24: t.high24,
-      low24: t.low24,
-      ma30: ind.ma30,
-      rsi6: ind.rsi6,
-      rsi12: ind.rsi12,
-      rsi24: ind.rsi24,
-      ma30_ts: ind.ts,
-      rsi_ts: ind.ts,
-      price_ts: t.ts
-    });
-  } catch (e) {
-    res.status(500).json({ error: String(e?.message || e) });
-  }
-});
-
+// /api/quote_batch?symbols=BTCUSDT,ETHUSDT&tf=15
 app.get("/api/quote_batch", async (req, res) => {
   try {
+    const tf = Number(req.query.tf || 15);
     const symbols = String(req.query.symbols || "BTCUSDT")
       .split(",").map(s => s.trim()).filter(Boolean);
 
@@ -245,22 +193,20 @@ app.get("/api/quote_batch", async (req, res) => {
     for (const sym of symbols) {
       try {
         const t = await fetchTicker(sym);
-        const ind = await fetchIndicators15m(sym);
-
+        const ind = await fetchIndicators(sym, tf);
         results.push({
           symbol: t.symbol,
           fair: t.fair,
           last: t.last,
           index: t.index,
-          high24: t.high24,
-          low24: t.low24,
+          price_ts: t.ts,
+
+          tf: ind.tf,
           ma30: ind.ma30,
           rsi6: ind.rsi6,
           rsi12: ind.rsi12,
           rsi24: ind.rsi24,
-          ma30_ts: ind.ts,
-          rsi_ts: ind.ts,
-          price_ts: t.ts
+          ind_ts: ind.ts
         });
       } catch (e) {
         results.push({ symbol: mexcContractSymbol(sym), error: String(e?.message || e) });
@@ -273,4 +219,5 @@ app.get("/api/quote_batch", async (req, res) => {
   }
 });
 
-app.listen(PORT, () => console.log("✅ Server running on port", PORT, "base=", MEXC_BASE));
+app.listen(PORT, () => console.log("✅ Server running on port", PORT, "BASE:", MEXC_BASE));
+
