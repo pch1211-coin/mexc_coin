@@ -1,7 +1,3 @@
-기존 server
-
-
-
 const express = require("express");
 const path = require("path");
 
@@ -220,4 +216,5 @@ app.get("/api/quote_batch", async (req, res) => {
 });
 
 app.listen(PORT, () => console.log("✅ Server running on port", PORT, "BASE:", MEXC_BASE));
+
 
