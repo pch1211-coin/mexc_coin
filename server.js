@@ -5,12 +5,11 @@ const path = require("path");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ✅ MEXC_BASE: Cloudflare Worker 프록시(권장) 또는 기본값
-// 예) https://mexc-proxy.pch1211.workers.dev
+// ✅ Cloudflare Worker 프록시를 쓰면 여기로 설정
+// Render 환경변수: MEXC_BASE = https://mexc-proxy.pch1211.workers.dev
 const RAW_BASE = process.env.MEXC_BASE || "https://contract.mexc.com";
-const MEXC_BASE = String(RAW_BASE).replace(/\/+$/, ""); // 뒤 / 제거
+const MEXC_BASE = String(RAW_BASE).replace(/\/+$/, "");
 
-// ====== Static (public) ======
 app.use(express.static(path.join(__dirname, "public")));
 
 // ====== Cache ======
@@ -30,7 +29,7 @@ function mexcContractSymbol(sym) {
   const s = String(sym || "").trim().toUpperCase();
   if (!s) return "";
   if (s.includes("_")) return s;
-  if (s.endsWith("USDT")) return s.replace(/USDT$/, "_USDT"); // BTCUSDT -> BTC_USDT
+  if (s.endsWith("USDT")) return s.replace(/USDT$/, "_USDT");
   return s;
 }
 
@@ -38,26 +37,104 @@ function toNumOrNull(v) {
   if (v === null || v === undefined) return null;
   if (typeof v === "string" && v.trim() === "") return null;
   const n = Number(v);
-  if (!Number.isFinite(n)) return null;
-  return n;
-}
-
-function pickNum(obj, keys) {
-  for (const k of keys) {
-    const n = toNumOrNull(obj?.[k]);
-    if (n !== null) return n;
-  }
-  return null;
+  return Number.isFinite(n) ? n : null;
 }
 
 async function fetchJson(url) {
   const res = await fetch(url, { headers: { "User-Agent": "mexc-coin-dashboard" } });
   const text = await res.text();
   let json;
-  try { json = JSON.parse(text); }
-  catch { throw new Error("JSON parse fail"); }
+  try { json = JSON.parse(text); } catch { throw new Error("JSON parse fail"); }
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return json;
+}
+
+// ====== 24h High/Low fallback by kline (Min15, last ~26h) ======
+async function fetchHighLow24ByKline15m(sym) {
+  const msym = mexcContractSymbol(sym);
+  const key = `hl24_15m:${msym}`;
+  const cached = getCache(key);
+  if (cached) return cached;
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  const startSec = nowSec - 26 * 60 * 60; // 26시간(여유)
+  const url = `${MEXC_BASE}/api/v1/contract/kline/${encodeURIComponent(msym)}?interval=Min15&start=${startSec}&end=${nowSec}`;
+  const json = await fetchJson(url);
+
+  if (!json?.success || !json.data) throw new Error("kline fail");
+  const d = json.data;
+
+  // MEXC kline은 high/low 배열이 오는 경우가 많음
+  const highs = Array.isArray(d.high) ? d.high.map(Number).filter(Number.isFinite) : [];
+  const lows  = Array.isArray(d.low)  ? d.low.map(Number).filter(Number.isFinite)  : [];
+
+  // 없으면 close로라도 계산
+  const closes = Array.isArray(d.close) ? d.close.map(Number).filter(Number.isFinite) : [];
+
+  const hiArr = highs.length ? highs : closes;
+  const loArr = lows.length ? lows : closes;
+
+  if (hiArr.length < 10 || loArr.length < 10) throw new Error("not enough candles");
+
+  const high24 = Math.max(...hiArr);
+  const low24  = Math.min(...loArr);
+
+  const out = { high24, low24, ts: Date.now() };
+  setCache(key, out, 60 * 1000); // 60초 캐시
+  return out;
+}
+
+// ====== Ticker ======
+async function fetchTicker(sym) {
+  const msym = mexcContractSymbol(sym);
+  const key = `ticker:${msym}`;
+  const cached = getCache(key);
+  if (cached) return cached;
+
+  const url = `${MEXC_BASE}/api/v1/contract/ticker?symbol=${encodeURIComponent(msym)}`;
+  const json = await fetchJson(url);
+  if (!json?.success || !json.data) throw new Error("ticker fail");
+
+  const d = json.data;
+
+  const last = toNumOrNull(d.lastPrice);
+  const fair = toNumOrNull(d.fairPrice ?? d.fair_price ?? last);
+  const index = toNumOrNull(d.indexPrice ?? d.index_price);
+
+  // ticker에서 24h high/low가 오는 경우가 있는데, 키가 제각각이라 넓게 시도
+  const highFromTicker =
+    toNumOrNull(d.high24Price) ?? toNumOrNull(d.high24) ?? toNumOrNull(d.highPrice) ?? toNumOrNull(d.high);
+  const lowFromTicker =
+    toNumOrNull(d.low24Price) ?? toNumOrNull(d.low24) ?? toNumOrNull(d.lowPrice) ?? toNumOrNull(d.low);
+
+  if (!Number.isFinite(fair)) throw new Error("fair invalid");
+
+  // ✅ ticker low/high가 없거나 0이면 kline으로 계산해서 채움 (확실)
+  let high24 = highFromTicker;
+  let low24 = lowFromTicker;
+
+  if (!(Number.isFinite(high24) && high24 > 0) || !(Number.isFinite(low24) && low24 > 0)) {
+    try {
+      const hl = await fetchHighLow24ByKline15m(msym);
+      if (!(Number.isFinite(high24) && high24 > 0)) high24 = hl.high24;
+      if (!(Number.isFinite(low24) && low24 > 0)) low24 = hl.low24;
+    } catch (e) {
+      // fallback 실패 시 null 유지
+    }
+  }
+
+  const out = {
+    symbol: msym,
+    last: Number.isFinite(last) ? last : null,
+    fair,
+    index: Number.isFinite(index) ? index : null,
+    high24: Number.isFinite(high24) ? high24 : null,
+    low24: Number.isFinite(low24) ? low24 : null,
+    ts: Date.now()
+  };
+
+  setCache(key, out, 2000); // 2초 캐시
+  return out;
 }
 
 // ====== RSI (Wilder) ======
@@ -80,15 +157,12 @@ function calcRSI_Wilder(closes, period) {
     avgGain = (avgGain * (period - 1) + gain) / period;
     avgLoss = (avgLoss * (period - 1) + loss) / period;
   }
-
   if (avgLoss === 0) return 100;
   const rs = avgGain / avgLoss;
   return 100 - (100 / (1 + rs));
 }
 
-// ====== Kline closes (15분봉 고정) ======
-// ✅ 핵심 수정: start/end는 "초(sec)" 단위로 보냄
-// ✅ 캔들이 부족하면 기간을 늘려서 1회 재시도
+// ====== Kline closes (15분봉) ======
 async function fetchCloses15m(sym) {
   const msym = mexcContractSymbol(sym);
   const key = `kline15:${msym}`;
@@ -98,65 +172,21 @@ async function fetchCloses15m(sym) {
   async function loadWindow(days) {
     const nowSec = Math.floor(Date.now() / 1000);
     const startSec = nowSec - days * 24 * 60 * 60;
-
     const url = `${MEXC_BASE}/api/v1/contract/kline/${encodeURIComponent(msym)}?interval=Min15&start=${startSec}&end=${nowSec}`;
     const json = await fetchJson(url);
     if (!json?.success || !json.data?.close) throw new Error("kline fail");
-
-    const closes = json.data.close.map(Number).filter(v => Number.isFinite(v));
-    return closes;
+    return json.data.close.map(Number).filter(Number.isFinite);
   }
 
-  // 1차: 10일
   let closes = await loadWindow(10);
-
-  // 부족하면 2차: 30일로 재시도
   if (closes.length < 60) closes = await loadWindow(30);
-
   if (closes.length < 60) throw new Error("not enough candles");
 
   setCache(key, closes, 60 * 1000); // 60초 캐시
   return closes;
 }
 
-// ====== MEXC Futures Ticker (USDT-M) ======
-async function fetchTicker(sym) {
-  const msym = mexcContractSymbol(sym);
-  const key = `ticker:${msym}`;
-  const cached = getCache(key);
-  if (cached) return cached;
-
-  const url = `${MEXC_BASE}/api/v1/contract/ticker?symbol=${encodeURIComponent(msym)}`;
-  const json = await fetchJson(url);
-  if (!json?.success || !json.data) throw new Error("ticker fail");
-
-  const d = json.data;
-
-  const last = toNumOrNull(d.lastPrice);
-  const fair = toNumOrNull(d.fairPrice ?? d.fair_price ?? last);
-  const index = toNumOrNull(d.indexPrice ?? d.index_price);
-
-  // 24h High/Low (여러 후보 키)
-  const high24 = pickNum(d, ["high24Price", "high24", "highPrice", "high_price", "high"]);
-  const low24  = pickNum(d, ["low24Price", "low24", "lowPrice", "low_price", "low"]);
-
-  if (!Number.isFinite(fair)) throw new Error("fair invalid");
-
-  const out = {
-    symbol: msym,
-    last: Number.isFinite(last) ? last : null,
-    fair,
-    index: Number.isFinite(index) ? index : null,
-    high24: Number.isFinite(high24) ? high24 : null,
-    low24: Number.isFinite(low24) ? low24 : null,
-    ts: Date.now()
-  };
-
-  setCache(key, out, 2000); // 2초 캐시
-  return out;
-}
-
-// ====== MA30 + RSI(6/12/24) (15분봉 기준) ======
+// ====== MA30 + RSI(6/12/24) ======
 async function fetchIndicators15m(sym) {
   const msym = mexcContractSymbol(sym);
   const key = `ind15:${msym}`;
@@ -172,15 +202,7 @@ async function fetchIndicators15m(sym) {
   const rsi12 = calcRSI_Wilder(closes, 12);
   const rsi24 = calcRSI_Wilder(closes, 24);
 
-  const out = {
-    symbol: msym,
-    ma30,
-    rsi6,
-    rsi12,
-    rsi24,
-    ts: Date.now()
-  };
-
+  const out = { symbol: msym, ma30, rsi6, rsi12, rsi24, ts: Date.now() };
   setCache(key, out, 60 * 1000); // 60초 캐시
   return out;
 }
