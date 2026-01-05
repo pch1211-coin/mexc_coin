@@ -1,7 +1,7 @@
 // ====== Config ======
 const TREND_BAND_PCT = 0.3;
 const REFRESH_MS = 3000;       // 현재가 갱신 주기(서버 캐시 2초)
-const MA30_TTL_NOTE = "MA30/RSI는 서버에서 60초 캐시(15분봉 기준)";
+const MA30_TTL_NOTE = "MA30/RSI/24h는 서버에서 60초 캐시(15분봉 기준)";
 
 const DEFAULT_WATCHLIST = [
   "BTCUSDT","ETHUSDT","COREUSDT","WLDUSDT","PIUSDT","DOGEUSDT","XRPUSDT","TRXUSDT"
@@ -9,8 +9,46 @@ const DEFAULT_WATCHLIST = [
 
 const LEV_OPTIONS = [1,3,5,10,15,20,25,30,35,40,45,50];
 
-// 슬롯 개수: 모바일 6 / PC 12 (반응형이라 슬롯은 12 고정 렌더, 모바일은 스크롤 없이 6개가 ‘한 화면’ 목표)
+// 슬롯 개수: 모바일 6 / PC 12 (반응형이라 슬롯은 12 고정 렌더)
 const SLOT_COUNT = 12;
+
+// ====== Sound (모바일/크롬 자동재생 차단 대응) ======
+let audioCtx = null;
+let soundOn = (() => {
+  const v = localStorage.getItem("soundOn");
+  return v === null ? true : (v === "1");
+})();
+
+function ensureAudio() {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") return audioCtx.resume();
+  } catch {}
+  return Promise.resolve();
+}
+
+// 외부에서도 쓰게 열어둠(기존 코드에서 beep() 호출해도 동작)
+window.beep = async function beep(times=1) {
+  if (!soundOn) return;
+  try {
+    await ensureAudio();
+    for (let k=0;k<times;k++){
+      const o = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      o.type = "sine";
+      o.frequency.value = 880;
+      g.gain.value = 0.06;
+      o.connect(g); g.connect(audioCtx.destination);
+      o.start();
+      await new Promise(r=>setTimeout(r,120));
+      o.stop();
+      await new Promise(r=>setTimeout(r,80));
+    }
+  } catch {}
+};
+
+// 첫 사용자 터치로 오디오 잠금 해제(모바일 필수)
+document.addEventListener("pointerdown", () => { ensureAudio(); }, { once: true });
 
 // ====== Storage ======
 function loadJSON(key, fallback) {
@@ -41,23 +79,22 @@ if (!Array.isArray(watchlist) || watchlist.length === 0) {
 // 슬롯별 선택된 심볼
 let slots = loadJSON("slots", null);
 if (!Array.isArray(slots) || slots.length !== SLOT_COUNT) {
-  // 기본 배치: 와치리스트 앞에서 12개 채우기(모자라면 반복)
   slots = Array.from({ length: SLOT_COUNT }, (_, i) => watchlist[i % watchlist.length]);
   saveJSON("slots", slots);
 }
 
-// 심볼별 입력값(=DASH 입력칸들)
+// 심볼별 입력값
 let inputsMap = loadJSON("inputsMap", {});
 function ensureInputs(sym) {
   const s = normSymForUI(sym);
   inputsMap[s] ||= {
-    margin: 5.8,      // 투자금(USDT) = Margin
-    leverage: 20,     // 레버리지
-    entry: 0,         // 진입가
-    side: "SHORT",    // LONG/SHORT
-    tp_pct: 1.5,      // 목표수익(%)
-    sl_pct: 0.7,      // 손절(%)
-    near_pct: 0.5     // 근접기준(%)
+    margin: 5.8,
+    leverage: 20,
+    entry: 0,
+    side: "SHORT",
+    tp_pct: 1.5,
+    sl_pct: 0.7,
+    near_pct: 0.5
   };
   return inputsMap[s];
 }
@@ -67,7 +104,7 @@ function saveAll() {
   saveJSON("inputsMap", inputsMap);
 }
 
-// ====== Calculations (DASH 방식 유지) ======
+// ====== Calculations ======
 function calcTrend(price, ma30, prevTrend) {
   if (!price || !ma30) return "NONE";
   const upper = ma30 * (1 + TREND_BAND_PCT / 100);
@@ -107,6 +144,21 @@ const wlAdd = document.getElementById("wlAdd");
 const wlList = document.getElementById("wlList");
 const btnReset = document.getElementById("btnReset");
 
+// (있으면) 스피커 버튼도 자동 연결
+const btnSpeaker = document.getElementById("btnSpeaker") || document.getElementById("btnSound") || null;
+if (btnSpeaker) {
+  const applyLabel = () => {
+    btnSpeaker.textContent = soundOn ? "🔊 ON" : "🔇 OFF";
+  };
+  applyLabel();
+  btnSpeaker.onclick = async () => {
+    soundOn = !soundOn;
+    localStorage.setItem("soundOn", soundOn ? "1" : "0");
+    applyLabel();
+    await ensureAudio(); // ✅ 버튼 눌렀을 때 오디오 unlock
+  };
+}
+
 btnWatch.onclick = () => { drawer.classList.add("open"); renderWatchlist(); };
 btnClose.onclick = () => drawer.classList.remove("open");
 backdrop.onclick = () => drawer.classList.remove("open");
@@ -117,12 +169,11 @@ wlAdd.onclick = () => {
   if (!watchlist.includes(v)) watchlist.unshift(v);
   wlInput.value = "";
   saveAll();
-  renderAll(); // 드롭다운 옵션 갱신
+  renderAll();
   renderWatchlist();
 };
 
 btnReset.onclick = () => {
-  // 슬롯을 와치리스트 기준으로 다시 자동 배치
   slots = Array.from({ length: SLOT_COUNT }, (_, i) => watchlist[i % watchlist.length]);
   saveAll();
   renderAll();
@@ -137,7 +188,6 @@ function renderWatchlist() {
     row.querySelector("button").onclick = () => {
       watchlist = watchlist.filter(s => s !== sym);
       if (watchlist.length === 0) watchlist = DEFAULT_WATCHLIST.slice();
-      // 슬롯에서 지워진 심볼은 첫번째로 치환
       slots = slots.map(s => (s === sym ? watchlist[0] : s));
       saveAll();
       renderAll();
@@ -155,7 +205,6 @@ function renderCard(slotIndex) {
   card.className = "card";
   card.id = `card_${slotIndex}`;
 
-  // 드롭다운 옵션
   const options = watchlist.map(s => {
     const sel = (s === sym) ? "selected" : "";
     return `<option value="${s}" ${sel}>${s}</option>`;
@@ -166,6 +215,7 @@ function renderCard(slotIndex) {
     return `<option value="${v}" ${sel}>${v}x</option>`;
   }).join("");
 
+  // ✅ 가격/지표 영역: 왼쪽(가격/MA/24h), 오른쪽(RSI 3줄)
   card.innerHTML = `
     <div class="row">
       <div class="title">슬롯 ${slotIndex+1}</div>
@@ -175,17 +225,14 @@ function renderCard(slotIndex) {
     <label>심볼 (와치리스트 드롭다운)</label>
     <select id="sym_${slotIndex}">${options}</select>
 
-    <div style="position:relative;margin-top:10px">
-      <div class="big" id="price_${slotIndex}">현재가(Fair): -</div>
-      <div class="muted" id="ma30_${slotIndex}">MA30: -</div>
-      <div class="muted" id="hl24_${slotIndex}">24h High: - / 24h Low: -</div>
+    <div class="row" style="align-items:flex-start;margin-top:10px">
+      <div style="flex:1;min-width:0">
+        <div class="big" id="price_${slotIndex}">현재가(Fair): -</div>
+        <div class="muted" id="ma30_${slotIndex}">MA30: -</div>
+        <div class="muted" id="hl24_${slotIndex}">24h High: - / 24h Low: -</div>
+      </div>
 
-      <!-- ✅ RSI 표시(우측 고정) -->
-      <div id="rsiBox_${slotIndex}" style="
-        position:absolute; right:0; top:0;
-        text-align:right; font-weight:900;
-        color:#d8b55a; line-height:1.55;
-      ">
+      <div style="width:140px; text-align:right; line-height:1.9; font-weight:800; color:#f2c14e; white-space:nowrap">
         <div id="rsi6_${slotIndex}">RSI(6): -</div>
         <div id="rsi12_${slotIndex}">RSI(12): -</div>
         <div id="rsi24_${slotIndex}">RSI(24): -</div>
@@ -245,7 +292,7 @@ function renderCard(slotIndex) {
   card.querySelector(`#sym_${slotIndex}`).onchange = (e) => {
     slots[slotIndex] = normSymForUI(e.target.value);
     saveAll();
-    renderAll(); // 심볼 바뀌면 카드 전체 리렌더(입력맵/표시 매칭)
+    renderAll();
   };
 
   const bindNum = (id, key) => {
@@ -284,9 +331,7 @@ function renderCard(slotIndex) {
 
 function renderAll() {
   grid.innerHTML = "";
-  for (let i = 0; i < SLOT_COUNT; i++) {
-    grid.appendChild(renderCard(i));
-  }
+  for (let i = 0; i < SLOT_COUNT; i++) grid.appendChild(renderCard(i));
 }
 renderAll();
 
@@ -302,7 +347,6 @@ async function refresh() {
     const map = new Map();
     (json.results || []).forEach(r => map.set(normSymForUI(r.symbol), r));
 
-    // 화면 업데이트
     const now = new Date();
     syncInfo.textContent = `갱신: ${now.toLocaleTimeString()} / ${MA30_TTL_NOTE}`;
 
@@ -323,21 +367,19 @@ async function refresh() {
       const priceEl = document.getElementById(`price_${i}`);
       const maEl = document.getElementById(`ma30_${i}`);
       const hlEl = document.getElementById(`hl24_${i}`);
-
-      const rsi6El = document.getElementById(`rsi6_${i}`);
-      const rsi12El = document.getElementById(`rsi12_${i}`);
-      const rsi24El = document.getElementById(`rsi24_${i}`);
-
       const trendEl = document.getElementById(`trend_${i}`);
       const statusEl = document.getElementById(`status_${i}`);
       const recoEl = document.getElementById(`reco_${i}`);
       const metaEl = document.getElementById(`meta_${i}`);
 
+      const rsi6El = document.getElementById(`rsi6_${i}`);
+      const rsi12El = document.getElementById(`rsi12_${i}`);
+      const rsi24El = document.getElementById(`rsi24_${i}`);
+
       if (!q || q.error) {
         priceEl.textContent = `현재가(Fair): -`;
         maEl.textContent = `MA30: -`;
         hlEl.textContent = `24h High: - / 24h Low: -`;
-
         rsi6El.textContent = `RSI(6): ERR`;
         rsi12El.textContent = `RSI(12): ERR`;
         rsi24El.textContent = `RSI(24): ERR`;
@@ -359,21 +401,24 @@ async function refresh() {
       maEl.textContent = `MA30: ${fmt(ma30, 6)} (15분)`;
 
       // ✅ 24h High/Low
-      const h24 = q.high24;
-      const l24 = q.low24;
-      hlEl.textContent = `24h High: ${fmt(h24, 6)} / 24h Low: ${fmt(l24, 6)}`;
+      const h24 = (q.high24 === null || q.high24 === undefined) ? null : Number(q.high24);
+      const l24 = (q.low24 === null || q.low24 === undefined) ? null : Number(q.low24);
+      hlEl.textContent = `24h High: ${isFinite(h24) ? fmt(h24, 6) : "-"} / 24h Low: ${isFinite(l24) ? fmt(l24, 6) : "-"}`;
 
-      // ✅ RSI
-      rsi6El.textContent = `RSI(6): ${fmt(q.rsi6, 2)}`;
-      rsi12El.textContent = `RSI(12): ${fmt(q.rsi12, 2)}`;
-      rsi24El.textContent = `RSI(24): ${fmt(q.rsi24, 2)}`;
+      // ✅ RSI(6/12/24)
+      const r6 = Number(q.rsi6);
+      const r12 = Number(q.rsi12);
+      const r24 = Number(q.rsi24);
+      rsi6El.textContent = `RSI(6): ${isFinite(r6) ? fmt(r6, 2) : "ERR"}`;
+      rsi12El.textContent = `RSI(12): ${isFinite(r12) ? fmt(r12, 2) : "ERR"}`;
+      rsi24El.textContent = `RSI(24): ${isFinite(r24) ? fmt(r24, 2) : "ERR"}`;
 
       // Trend
       const t = calcTrend(price, ma30, null);
       trendEl.className = `pill ${t==="UP"?"up":t==="DOWN"?"down":"neutral"}`;
       trendEl.textContent = `트렌드: ${t==="UP"?"상승":t==="DOWN"?"하락":"중립"}`;
 
-      // Recommend (트렌드 방향일 때만 추천)
+      // Recommend
       let reco = "대기";
       if (t === "UP") reco = "LONG 진입 추천";
       if (t === "DOWN") reco = "SHORT 진입 추천";
@@ -418,7 +463,7 @@ async function refresh() {
       statusEl.className = `pill ${status.includes("터치")?"hit":status.includes("근접")?"warn":"neutral"}`;
       statusEl.textContent = `상태: ${status || "-"}`;
 
-      // PnL/ROI (전 방식 유지: Size=Margin*Lev, ROI=PnL/Margin)
+      // PnL/ROI
       let pnl = null, roi = null;
       if (entry && margin > 0) {
         const size = margin * lev;
@@ -427,7 +472,13 @@ async function refresh() {
         roi = (pnl / margin) * 100;
       }
 
-      document.getElementById(`pnl_${i}`).textContent = pnl===null ? "-" : fmt(pnl, 6);
+      const pnlEl = document.getElementById(`pnl_${i}`);
+      pnlEl.textContent = pnl===null ? "-" : fmt(pnl, 6);
+
+      // ✅ PnL 색상(수익=빨강, 손실=파랑)
+      pnlEl.classList.remove("pnLPlus","pnLMinus");
+      if (pnl !== null) pnlEl.classList.add(pnl >= 0 ? "pnLPlus" : "pnLMinus");
+
       document.getElementById(`roi_${i}`).textContent = roi===null ? "-" : fmt(roi, 4);
 
       metaEl.textContent =
