@@ -553,7 +553,7 @@ async function refresh(){
 
       // ✅ ind_ts Invalid Date 방지
       metaEl.textContent =
-        `심볼: ${symC} / 레버리지: ${lev}x / price_ts=${safeTime(q.price_ts)} /
+        `심볼: ${symC} / 레버리지: ${lev}x / price_ts=${safeTime(q.price_ts)} / ind_ts=${safeTime(q.ind_ts)}`;
     }
   }catch(e){
     syncInfo.textContent = `갱신 오류: ${String(e?.message||e)}`;
@@ -562,4 +562,5 @@ async function refresh(){
 
 refresh();
 setInterval(refresh, REFRESH_MS);
+
 
