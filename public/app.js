@@ -406,6 +406,7 @@ async function refresh(){
         // 마지막 컨펌 방향은 status에서 결정되도록 아래에서 다시 세팅
       }
 
+      // ✅ (수정1) 에러 구간에서 lev/q.price_ts 참조 금지 + ind_ts 제거
       if(!q || q.error){
         priceEl.textContent = `현재가(Fair): -`;
         maEl.textContent = `MA30: -`;
@@ -415,8 +416,7 @@ async function refresh(){
         statusEl.textContent = "상태: -";
         recoEl.className = "pill warn";
         recoEl.textContent = `추천: 오류`;
-        metaEl.textContent =
-  `심볼: ${symC} / 레버리지: ${lev}x / price_ts=${new Date(q.price_ts).toLocaleTimeString()}`;
+        metaEl.textContent = q?.error ? `에러: ${q.error}` : "데이터 없음";
 
         r6El.textContent = "ERR";
         r12El.textContent = "ERR";
@@ -524,13 +524,20 @@ async function refresh(){
         pnl = size*frac;
         roi = (pnl/margin)*100;
       }
+
       const pnlEl = document.getElementById(`pnl_${i}`);
       pnlEl.textContent = pnl===null ? "-" : fmt(pnl,6);
-      pnlEl.className = (pnl!==null && pnl>=0) ? "pnLPlus" : "pnLMinus";
+
+      // ✅ (수정2) className로 덮어쓰지 말고 classList로 (pnl 클래스 유지)
+      pnlEl.classList.remove("pnLPlus","pnLMinus");
+      if (pnl !== null) pnlEl.classList.add(pnl >= 0 ? "pnLPlus" : "pnLMinus");
+
       document.getElementById(`roi_${i}`).textContent = roi===null ? "-" : fmt(roi,4);
 
+      // ✅ (수정3) ind_ts 제거 + price_ts 가드
+      const pts = q.price_ts ? new Date(q.price_ts).toLocaleTimeString() : "-";
       metaEl.textContent =
-        `심볼: ${symC} / 레버리지: ${lev}x / price_ts=${new Date(q.price_ts).toLocaleTimeString()} / ind_ts=${new Date(q.ind_ts).toLocaleTimeString()}`;
+        `심볼: ${symC} / 레버리지: ${lev}x / price_ts=${pts}`;
     }
   }catch(e){
     syncInfo.textContent = `갱신 오류: ${String(e?.message||e)}`;
@@ -539,5 +546,3 @@ async function refresh(){
 
 refresh();
 setInterval(refresh, REFRESH_MS);
-
-
