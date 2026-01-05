@@ -415,7 +415,8 @@ async function refresh(){
         statusEl.textContent = "상태: -";
         recoEl.className = "pill warn";
         recoEl.textContent = `추천: 오류`;
-        metaEl.textContent = q?.error ? `에러: ${q.error}` : "데이터 없음";
+        metaEl.textContent =
+  `심볼: ${symC} / 레버리지: ${lev}x / price_ts=${new Date(q.price_ts).toLocaleTimeString()}`;
 
         r6El.textContent = "ERR";
         r12El.textContent = "ERR";
@@ -538,4 +539,5 @@ async function refresh(){
 
 refresh();
 setInterval(refresh, REFRESH_MS);
+
 
