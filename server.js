@@ -4,7 +4,7 @@ const path = require("path");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ✅ MEXC_BASE: Cloudflare Worker 프록시 주소 넣기
+// ✅ Cloudflare Worker 프록시
 // 예) https://mexc-proxy.pch1211.workers.dev
 const MEXC_BASE = (process.env.MEXC_BASE || "https://contract.mexc.com").replace(/\/+$/,"");
 
@@ -38,7 +38,6 @@ function tfToInterval(tfMin) {
   if (n === 10) return "Min10";
   if (n === 15) return "Min15";
   if (n === 30) return "Min30";
-  // 기본 15분
   return "Min15";
 }
 
@@ -55,7 +54,7 @@ async function fetchJson(url) {
   catch { throw new Error("JSON parse fail"); }
 }
 
-// ====== API Calls ======
+// ====== MEXC Ticker ======
 async function fetchTicker(sym) {
   const msym = mexcContractSymbol(sym);
   const key = `ticker:${msym}`;
@@ -83,14 +82,14 @@ async function fetchTicker(sym) {
   return out;
 }
 
+// ====== Kline closes ======
 async function fetchCloses(sym, tfMin, need) {
   const msym = mexcContractSymbol(sym);
   const interval = tfToInterval(tfMin);
 
-  // need보다 넉넉히
-  const want = Math.max(need + 20, 120);
+  // ✅ RSI 안정화 위해 넉넉히 가져오기
+  const want = Math.max(need + 200, 260);
 
-  // TF에 따라 과거 범위 잡기 (대충 want개 캔들)
   const nowSec = Math.floor(Date.now() / 1000);
   const secPer = Number(tfMin) * 60;
   const startSec = nowSec - want * secPer;
@@ -100,8 +99,14 @@ async function fetchCloses(sym, tfMin, need) {
 
   if (!json?.success || !json?.data?.close) throw new Error("kline fail");
 
-  const closes = json.data.close.map(Number).filter(v => Number.isFinite(v));
+  let closes = json.data.close.map(Number).filter(v => Number.isFinite(v));
   if (closes.length < need) throw new Error("not enough candles");
+
+  // ✅ 진행중 봉(마지막 close) 때문에 RSI/MA가 튀는 경우가 많아서 기본으로 1개 제외
+  // (MEXC 차트와 더 잘 맞는 쪽이 대부분 이 설정)
+  if (closes.length > need + 5) closes = closes.slice(0, -1);
+
+  if (closes.length < need) throw new Error("not enough candles(after trim)");
   return closes;
 }
 
@@ -110,22 +115,35 @@ function calcMA(closes, period) {
   return arr.reduce((a,b)=>a+b,0)/period;
 }
 
-// Wilder RSI
-function calcRSI(closes, period) {
-  const arr = closes.slice(-(period+1));
-  if (arr.length < period+1) return NaN;
+// ✅ 진짜 Wilder RSI(RMA 스무딩) - MEXC 차트 방식에 가장 근접
+function calcRSI_Wilder(closes, period) {
+  if (!Array.isArray(closes) || closes.length < period + 2) return NaN;
 
-  let gains = 0, losses = 0;
-  for (let i=1; i<arr.length; i++) {
-    const diff = arr[i] - arr[i-1];
-    if (diff >= 0) gains += diff;
-    else losses += (-diff);
+  let gain = 0, loss = 0;
+
+  // 초기 평균(첫 period 구간)
+  for (let i = 1; i <= period; i++) {
+    const diff = closes[i] - closes[i - 1];
+    if (diff >= 0) gain += diff;
+    else loss += -diff;
   }
-  const avgGain = gains/period;
-  const avgLoss = losses/period;
+
+  let avgGain = gain / period;
+  let avgLoss = loss / period;
+
+  // 이후는 Wilder 스무딩: RMA
+  for (let i = period + 1; i < closes.length; i++) {
+    const diff = closes[i] - closes[i - 1];
+    const g = diff > 0 ? diff : 0;
+    const l = diff < 0 ? -diff : 0;
+
+    avgGain = (avgGain * (period - 1) + g) / period;
+    avgLoss = (avgLoss * (period - 1) + l) / period;
+  }
+
   if (avgLoss === 0) return 100;
-  const rs = avgGain/avgLoss;
-  return 100 - (100/(1+rs));
+  const rs = avgGain / avgLoss;
+  return 100 - (100 / (1 + rs));
 }
 
 async function fetchIndicators(sym, tfMin) {
@@ -134,14 +152,13 @@ async function fetchIndicators(sym, tfMin) {
   const cached = getCache(key);
   if (cached) return cached;
 
-  // MA30: 30개 필요
-  // RSI24: 25개 필요
+  // MA30 + RSI24 계산에 충분한 길이 확보
   const closes = await fetchCloses(msym, tfMin, 60);
 
   const ma30 = calcMA(closes, 30);
-  const rsi6 = calcRSI(closes, 6);
-  const rsi12 = calcRSI(closes, 12);
-  const rsi24 = calcRSI(closes, 24);
+  const rsi6 = calcRSI_Wilder(closes, 6);
+  const rsi12 = calcRSI_Wilder(closes, 12);
+  const rsi24 = calcRSI_Wilder(closes, 24);
 
   const out = {
     symbol: msym,
@@ -153,7 +170,7 @@ async function fetchIndicators(sym, tfMin) {
     ts: Date.now()
   };
 
-  // ✅ 지표는 60초 캐시 (너 스샷 "RSI+MA30=60s 캐시" 맞춤)
+  // ✅ 지표는 60초 캐시
   setCache(key, out, 60 * 1000);
   return out;
 }
