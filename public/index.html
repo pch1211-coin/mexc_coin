@@ -7,24 +7,17 @@
   <style>
     body{margin:0;background:#0b1220;color:#e8f0ff;font-family:system-ui}
     header{padding:14px 14px 10px;border-bottom:1px solid #1f2c4a;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-    h1{font-size:18px;margin:0}
+    h1{font-size:18px;margin:0;display:flex;align-items:center;gap:8px}
     .btn{background:#111a2e;border:1px solid #263a63;color:#e8f0ff;border-radius:10px;padding:8px 10px;cursor:pointer}
     .btn:active{transform:translateY(1px)}
     .muted{opacity:.75;font-size:12px}
     .wrap{padding:12px}
     .grid{display:grid;gap:10px}
-
-    /* 모바일: 2열 */
     @media (max-width: 640px){ .grid{grid-template-columns:repeat(2, minmax(0,1fr));} }
-    /* 태블릿: 3열 */
     @media (min-width: 641px) and (max-width: 1023px){ .grid{grid-template-columns:repeat(3, minmax(0,1fr));} }
-    /* PC: 4열 */
     @media (min-width: 1024px){ .grid{grid-template-columns:repeat(4, minmax(0,1fr));} }
 
-    .card{
-      background:#111a2e;border:1px solid #1f2c4a;border-radius:14px;
-      padding:12px; position:relative; overflow:hidden;
-    }
+    .card{background:#111a2e;border:1px solid #1f2c4a;border-radius:14px;padding:12px;position:relative}
     .row{display:flex;justify-content:space-between;gap:10px;align-items:center}
     .title{font-weight:800}
     select,input{width:100%;padding:8px;border-radius:10px;border:1px solid #263a63;background:#0b1220;color:#fff}
@@ -38,9 +31,11 @@
     .hit{background:#ff5a5a;color:#fff}
     .ok{background:#59d38a;color:#000}
 
-    /* ✅ 예상마진(PnL) 텍스트 색상 */
-    .pnLPlus { color:#ff4d4d; }
-    .pnLMinus{ color:#4d79ff; }
+    /* header controls */
+    .ctrl{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    .ctrl .box{display:flex;gap:6px;align-items:center}
+    .ctrl .box span{font-size:12px;opacity:.85}
+    .ctrl select,.ctrl input{width:auto;min-width:90px}
 
     /* Watchlist drawer */
     .drawer{position:fixed;inset:0;display:none}
@@ -53,121 +48,76 @@
     .item code{flex:1}
     .xbtn{background:#2b3550;border:1px solid #3c4b75;color:#fff;border-radius:10px;padding:6px 8px;cursor:pointer}
 
-    /* ✅ RSI 표시(PC: 오른쪽 고정 / 모바일: 겹침 방지) */
-.rsiBox{
-  position:absolute;
-  right:12px;
-  top:92px;
-  text-align:right;
-  line-height:1.9;
-  font-weight:900;
-  color:#d7b35a;
-  user-select:none;
-  pointer-events:none;
-}
+    /* PnL color */
+    .pnLPlus { color:#ff4d4d; }
+    .pnLMinus{ color:#4d79ff; }
 
-/* ✅ 모바일에서는 absolute 고정 해제 → 겹침 방지 */
-@media (max-width: 640px){
-  .rsiBox{
-    position:static;          /* 핵심: absolute 해제 */
-    margin-top:6px;
-    text-align:right;
-    line-height:1.6;
-    font-size:12px;
-  }
-}
+    /* ✅ RSI (겹침 방지: flex로 항상 분리) */
+    .priceRow{display:flex;gap:12px;align-items:flex-start}
+    .priceBox{flex:1;min-width:0}
+    .rsiBox{min-width:110px;text-align:right;line-height:1.7;font-weight:900;color:#d7b35a;white-space:nowrap}
+    .rsiBox span{font-weight:900}
 
-    /* ✅ 상단 컨트롤 */
-    .ctrl{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-    .ctrl label{margin:0;font-size:12px;opacity:.85}
-    .ctrl select,.ctrl input{width:auto;min-width:86px;padding:6px 8px;border-radius:10px}
-    .iconBtn{display:flex;align-items:center;gap:6px}
-
-    /* =========================
-       🔕 점멸/깜빡임 제거 (애니메이션 없음)
-       ========================= */
-    .blinkBlue, .blinkRed, .blink, .flash, .pulse { animation:none !important; }
-    * { transition: none !important; }
-
-    /* =========================
-       ✅ 컨펌 시각화(깜빡임 없음)
-       ========================= */
-    .card.confirmViz{
-      border-color: #ff4d4d !important;
-      box-shadow: 0 0 0 2px rgba(255,77,77,.35), 0 0 18px rgba(255,77,77,.18) !important;
+    @media (max-width:640px){
+      .rsiBox{min-width:0;font-size:12px;line-height:1.55}
     }
-    .card .confirmBadge{
-      position:absolute;
-      top:10px;
-      right:10px;
-      padding:6px 10px;
-      border-radius:999px;
-      font-size:12px;
-      font-weight:900;
-      background:#ff4d4d;
-      color:#fff;
-      display:none;
-    }
-    .card.confirmViz .confirmBadge{ display:inline-block; }
-    /* =========================
-   컨펌 시 슬롯 테두리 색상
-   ========================= */
 
-/* 기본 컨펌(공통) */
-.card.confirm {
-  border-width: 2px;
-  box-shadow: 0 0 0 1px rgba(255,255,255,0.05);
-}
+    /* ✅ 컨펌 테두리(깜빡임 없음) */
+    .card.confirm{border-width:2px}
+    .card.confirm.long{border-color:#ff4d4d !important; box-shadow:0 0 14px rgba(255,77,77,.35)}
+    .card.confirm.short{border-color:#4d79ff !important; box-shadow:0 0 14px rgba(77,121,255,.35)}
 
-/* 🔴 LONG 컨펌 */
-.card.confirm.long {
-  border-color: #ff4d4d !important;
-  box-shadow: 0 0 12px rgba(255, 77, 77, 0.35);
-}
-
-/* 🔵 SHORT 컨펌 */
-.card.confirm.short {
-  border-color: #4d79ff !important;
-  box-shadow: 0 0 12px rgba(77, 121, 255, 0.35);
-}
+    /* ✅ 근접 테두리 */
+    .card.near{border-width:2px;border-color:#ffd36b !important; box-shadow:0 0 12px rgba(255,211,107,.25)}
   </style>
 </head>
 <body>
   <header>
     <h1>📊 MEXC 선물 DASH (웹)</h1>
-
     <button class="btn" id="btnWatch">와치리스트</button>
     <button class="btn" id="btnReset">슬롯 초기화(6/12)</button>
 
     <div class="ctrl">
-      <label>시간봉</label>
-      <!-- ✅ 1분/3분 삭제: 5/15/30만 -->
-      <select id="tfSelect">
-        <option value="Min5">5분</option>
-        <option value="Min15" selected>15분</option>
-        <option value="Min30">30분</option>
-      </select>
+      <div class="box">
+        <span>시간봉</span>
+        <select id="tfSel">
+          <option value="5">5분</option>
+          <option value="10">10분</option>
+          <option value="15" selected>15분</option>
+          <option value="30">30분</option>
+        </select>
+      </div>
 
-      <label>근접표시</label>
-      <select id="nearShowMin">
-        <option value="3" selected>3분</option>
-        <option value="5">5분</option>
-      </select>
+      <div class="box">
+        <span>근접표시</span>
+        <select id="nearShowSel">
+          <option value="1">1분</option>
+          <option value="3" selected>3분</option>
+          <option value="5">5분</option>
+        </select>
+      </div>
 
-      <label>컨펌표시</label>
-      <select id="confirmShowMin">
-        <option value="5" selected>5분</option>
-        <option value="10">10분</option>
-      </select>
+      <div class="box">
+        <span>컨펌표시</span>
+        <select id="confirmShowSel">
+          <option value="3">3분</option>
+          <option value="5" selected>5분</option>
+          <option value="10">10분</option>
+        </select>
+      </div>
 
-      <label>근접(%)</label>
-      <input id="nearPctGlobal" type="number" step="0.01" value="0.15"/>
+      <div class="box">
+        <span>근접(%)</span>
+        <input id="nearPct" type="number" step="0.01" value="0.15" style="width:90px"/>
+      </div>
 
-      <label>컨펌(%)</label>
-      <input id="confirmPctGlobal" type="number" step="0.01" value="0.30"/>
+      <div class="box">
+        <span>컨펌(%)</span>
+        <input id="confirmPct" type="number" step="0.01" value="0.30" style="width:90px"/>
+      </div>
+
+      <button class="btn" id="soundBtn">🔊 ON</button>
     </div>
-
-    <button class="btn iconBtn" id="btnSound" title="알림 소리 On/Off">🔊 <span id="soundTxt">ON</span></button>
 
     <span class="muted" id="syncInfo">—</span>
   </header>
@@ -176,7 +126,6 @@
     <div class="grid" id="grid"></div>
   </div>
 
-  <!-- Watchlist drawer -->
   <div class="drawer" id="drawer">
     <div class="backdrop" id="backdrop"></div>
     <div class="panel">
