@@ -266,8 +266,12 @@ function renderCard(i){
 
     <div class="priceRow" style="margin-top:8px">
       <div class="priceBox">
-        <div class="big" id="price_${i}">현재가(Fair): -</div>
-        <div class="muted" id="ma30_${i}">MA30: -</div>
+  <div class="big" id="price_${i}">현재가(Fair): -</div>
+  <div class="muted" id="ma30_${i}">MA30 : -</div>
+  <div class="muted" id="hl24_${i}">
+    24시 최고 : - / 24시 최저 : -
+  </div>
+</div>
         <!-- ✅ 24h High/Low 다시 추가 -->
         <div class="muted" id="hl24_${i}">24h High: - / 24h Low: -</div>
       </div>
@@ -448,7 +452,16 @@ async function refresh(){
       const ma30 = Number(q.ma30);
 
       priceEl.textContent = `현재가(Fair): ${fmt(price,6)}`;
-      maEl.textContent = `MA30: ${fmt(ma30,6)} (${tfMin}분)`;
+      maEl.textContent = `MA30 : ${fmt(ma30,6)} (${tfMin}분)`;
+
+// 24시간 High / Low 표시
+const h24 = isFinite(q.high24) ? fmt(q.high24,6) : "-";
+const l24 = isFinite(q.low24)  ? fmt(q.low24,6)  : "-";
+
+const hlEl = document.getElementById(`hl24_${i}`);
+if (hlEl) {
+  hlEl.textContent = `24시 최고 : ${h24} / 24시 최저 : ${l24}`;
+}
 
       // ✅ 24h High/Low 표시
       if (hlEl) {
@@ -562,5 +575,6 @@ async function refresh(){
 
 refresh();
 setInterval(refresh, REFRESH_MS);
+
 
 
