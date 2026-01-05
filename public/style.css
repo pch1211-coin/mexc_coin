@@ -104,3 +104,29 @@ hr { border:none; border-top:1px solid #1f2f52; margin:12px 0; }
   -webkit-appearance: none;
   margin: 0;
 }
+
+/* price/RSI 레이아웃 안정화 */
+.priceRow{
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-start;
+  gap:12px;
+}
+
+.priceBox{
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.rsiBox{
+  flex: 0 0 150px;
+  text-align:right;
+  line-height:1.9;
+  font-weight:800;
+  color:#f2c14e;
+  white-space:nowrap;
+}
+
+.nowrap{
+  white-space:nowrap;
+}
