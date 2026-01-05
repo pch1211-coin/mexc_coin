@@ -104,7 +104,7 @@ async function fetchCloses(sym, tfMin, need) {
 
   // ✅ 진행중 봉(마지막 close) 때문에 RSI/MA가 튀는 경우가 많아서 기본으로 1개 제외
   // (MEXC 차트와 더 잘 맞는 쪽이 대부분 이 설정)
-  if (closes.length > need + 5) closes = closes.slice(0, -1);
+  ///if (closes.length > need + 5) closes = closes.slice(0, -1);
 
   if (closes.length < need) throw new Error("not enough candles(after trim)");
   return closes;
@@ -216,4 +216,5 @@ app.get("/api/quote_batch", async (req, res) => {
 });
 
 app.listen(PORT, () => console.log("✅ Server running on port", PORT, "BASE:", MEXC_BASE));
+
 
