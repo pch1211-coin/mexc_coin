@@ -66,14 +66,36 @@ hr { border:none; border-top:1px solid #1f2f52; margin:12px 0; }
   overflow: visible;
   padding-bottom: 16px;
 }
-/* ===== 입력창 / 셀렉트 길이 통일 ===== */
-.card input,
+/* ====== 입력 UI 폭 강제 통일 ====== */
+
+/* 레버리지 select 기준 폭 */
 .card select {
-  width: 100%;
+  width: 100% !important;
   box-sizing: border-box;
 }
 
-/* 숫자 input 화살표 때문에 어긋나는 것 방지 */
+/* 모든 input도 레버리지와 동일 폭 */
+.card input {
+  width: 100% !important;
+  box-sizing: border-box;
+}
+
+/* ====== 목표수익 / 손절 = 레버리지 폭의 1/2 ====== */
+.card .row > div {
+  flex: 1;
+}
+
+.card .row > div input {
+  width: 100% !important;
+}
+
+/* 두 칸 정확히 반반 */
+.card .row {
+  display: flex;
+  gap: 8px;
+}
+
+/* 숫자 input 화살표 제거 (폭 흔들림 방지) */
 .card input[type="number"] {
   -moz-appearance: textfield;
 }
@@ -81,12 +103,4 @@ hr { border:none; border-top:1px solid #1f2f52; margin:12px 0; }
 .card input[type="number"]::-webkit-inner-spin-button {
   -webkit-appearance: none;
   margin: 0;
-}
-
-/* 모바일에서도 동일 폭 유지 */
-@media (max-width: 768px) {
-  .card input,
-  .card select {
-    width: 100%;
-  }
 }
