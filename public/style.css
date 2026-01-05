@@ -40,3 +40,21 @@ hr { border:none; border-top:1px solid #1f2f52; margin:12px 0; }
 .wlItem { display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:999px; border:1px solid #2b3b63; background:#0b1220; }
 .wlItem button { padding:6px 8px; border-radius:10px; }
 .hint { font-size:12px; opacity:0.85; margin-top:10px; }
+/* ====== Confirm/Alert Border (확실히 보이게: outline + glow) ====== */
+.card.near {
+  outline: 3px solid #4d79ff !important;
+  outline-offset: -3px !important;
+  box-shadow: 0 0 0 2px rgba(77,121,255,.35), 0 0 18px rgba(77,121,255,.25) !important;
+}
+
+.card.confirm-long {
+  outline: 3px solid #ff4d4d !important;
+  outline-offset: -3px !important;
+  box-shadow: 0 0 0 2px rgba(255,77,77,.35), 0 0 18px rgba(255,77,77,.25) !important;
+}
+
+.card.confirm-short {
+  outline: 3px solid #4d79ff !important;
+  outline-offset: -3px !important;
+  box-shadow: 0 0 0 2px rgba(77,121,255,.35), 0 0 18px rgba(77,121,255,.25) !important;
+}
