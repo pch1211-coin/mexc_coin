@@ -171,7 +171,7 @@ async function fetchIndicators(sym, tfMin) {
   };
 
   // ✅ 지표는 60초 캐시
-  setCache(key, out, 60 * 1000);
+  setCache(key, out, 30 * 1000);
   return out;
 }
 
@@ -216,3 +216,4 @@ app.get("/api/quote_batch", async (req, res) => {
 });
 
 app.listen(PORT, () => console.log("✅ Server running on port", PORT, "BASE:", MEXC_BASE));
+
