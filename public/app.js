@@ -1,7 +1,7 @@
 // ====== Config ======
 const TREND_BAND_PCT = 0.3;
 const REFRESH_MS = 3000;       // 현재가 갱신 주기(서버 캐시 2초)
-const MA30_TTL_NOTE = "MA30는 서버에서 5분 캐시";
+const MA30_TTL_NOTE = "MA30/RSI는 서버에서 60초 캐시(15분봉 기준)";
 
 const DEFAULT_WATCHLIST = [
   "BTCUSDT","ETHUSDT","COREUSDT","WLDUSDT","PIUSDT","DOGEUSDT","XRPUSDT","TRXUSDT"
@@ -130,7 +130,7 @@ btnReset.onclick = () => {
 
 function renderWatchlist() {
   wlList.innerHTML = "";
-  watchlist.forEach((sym, idx) => {
+  watchlist.forEach((sym) => {
     const row = document.createElement("div");
     row.className = "item";
     row.innerHTML = `<code>${sym}</code><button class="xbtn">삭제</button>`;
@@ -175,11 +175,22 @@ function renderCard(slotIndex) {
     <label>심볼 (와치리스트 드롭다운)</label>
     <select id="sym_${slotIndex}">${options}</select>
 
-    <div class="big" id="price_${slotIndex}">현재가(Fair): -</div>
-    <div class="muted" id="ma30_${slotIndex}">MA30: -</div>
+    <div style="position:relative;margin-top:10px">
+      <div class="big" id="price_${slotIndex}">현재가(Fair): -</div>
+      <div class="muted" id="ma30_${slotIndex}">MA30: -</div>
+      <div class="muted" id="hl24_${slotIndex}">24h High: - / 24h Low: -</div>
 
-    <!-- ✅ 24h High/Low 추가 (표시만) -->
-    <div class="muted" id="hl_${slotIndex}">24h High: - / 24h Low: -</div>
+      <!-- ✅ RSI 표시(우측 고정) -->
+      <div id="rsiBox_${slotIndex}" style="
+        position:absolute; right:0; top:0;
+        text-align:right; font-weight:900;
+        color:#d8b55a; line-height:1.55;
+      ">
+        <div id="rsi6_${slotIndex}">RSI(6): -</div>
+        <div id="rsi12_${slotIndex}">RSI(12): -</div>
+        <div id="rsi24_${slotIndex}">RSI(24): -</div>
+      </div>
+    </div>
 
     <label>투자금(USDT)=마진(Margin)</label>
     <input id="margin_${slotIndex}" type="number" step="0.01" value="${inp.margin}"/>
@@ -311,17 +322,26 @@ async function refresh() {
 
       const priceEl = document.getElementById(`price_${i}`);
       const maEl = document.getElementById(`ma30_${i}`);
+      const hlEl = document.getElementById(`hl24_${i}`);
+
+      const rsi6El = document.getElementById(`rsi6_${i}`);
+      const rsi12El = document.getElementById(`rsi12_${i}`);
+      const rsi24El = document.getElementById(`rsi24_${i}`);
+
       const trendEl = document.getElementById(`trend_${i}`);
       const statusEl = document.getElementById(`status_${i}`);
       const recoEl = document.getElementById(`reco_${i}`);
       const metaEl = document.getElementById(`meta_${i}`);
 
-      // ✅ 24h High/Low 엘리먼트
-      const hlEl = document.getElementById(`hl_${i}`);
-
       if (!q || q.error) {
         priceEl.textContent = `현재가(Fair): -`;
         maEl.textContent = `MA30: -`;
+        hlEl.textContent = `24h High: - / 24h Low: -`;
+
+        rsi6El.textContent = `RSI(6): ERR`;
+        rsi12El.textContent = `RSI(12): ERR`;
+        rsi24El.textContent = `RSI(24): ERR`;
+
         trendEl.className = "pill neutral";
         trendEl.textContent = "트렌드: -";
         statusEl.className = "pill neutral";
@@ -329,9 +349,6 @@ async function refresh() {
         recoEl.className = "pill warn";
         recoEl.textContent = `추천: 오류`;
         metaEl.textContent = q?.error ? `에러: ${q.error}` : "데이터 없음";
-
-        // ✅ 24h High/Low 표시 초기화
-        if (hlEl) hlEl.textContent = `24h High: - / 24h Low: -`;
         continue;
       }
 
@@ -339,18 +356,17 @@ async function refresh() {
       const ma30 = Number(q.ma30);
 
       priceEl.textContent = `현재가(Fair): ${fmt(price, 6)}`;
-      maEl.textContent = `MA30: ${fmt(ma30, 6)}`;
+      maEl.textContent = `MA30: ${fmt(ma30, 6)} (15분)`;
 
-      // ✅ 24h High/Low 표시
-      if (hlEl) {
-        const h = Number(q.high24h);
-        const l = Number(q.low24h);
-        if (isFinite(h) && isFinite(l)) {
-          hlEl.textContent = `24h High: ${fmt(h, 6)} / 24h Low: ${fmt(l, 6)}`;
-        } else {
-          hlEl.textContent = `24h High: - / 24h Low: -`;
-        }
-      }
+      // ✅ 24h High/Low
+      const h24 = q.high24;
+      const l24 = q.low24;
+      hlEl.textContent = `24h High: ${fmt(h24, 6)} / 24h Low: ${fmt(l24, 6)}`;
+
+      // ✅ RSI
+      rsi6El.textContent = `RSI(6): ${fmt(q.rsi6, 2)}`;
+      rsi12El.textContent = `RSI(12): ${fmt(q.rsi12, 2)}`;
+      rsi24El.textContent = `RSI(24): ${fmt(q.rsi24, 2)}`;
 
       // Trend
       const t = calcTrend(price, ma30, null);
@@ -413,6 +429,7 @@ async function refresh() {
 
       document.getElementById(`pnl_${i}`).textContent = pnl===null ? "-" : fmt(pnl, 6);
       document.getElementById(`roi_${i}`).textContent = roi===null ? "-" : fmt(roi, 4);
+
       metaEl.textContent =
         `심볼: ${symC} / 레버리지: ${lev}x / Size=마진×레버리지 / price_ts=${new Date(q.price_ts).toLocaleTimeString()}`;
     }
