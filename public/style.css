@@ -58,3 +58,11 @@ hr { border:none; border-top:1px solid #1f2f52; margin:12px 0; }
   outline-offset: -3px !important;
   box-shadow: 0 0 0 2px rgba(77,121,255,.35), 0 0 18px rgba(77,121,255,.25) !important;
 }
+
+/* ===== 카드 잘림 방지 (24h High / Low 표시용) ===== */
+.card {
+  height: auto;
+  min-height: unset;
+  overflow: visible;
+  padding-bottom: 16px;
+}
