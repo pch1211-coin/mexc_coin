@@ -97,6 +97,13 @@ function validateTpSl(tp, sl){
   return { ok:true, warn, msg: warn ? "권장: 목표수익 ≥ 손절×1.3" : "" };
 }
 
+function safeTime(ts){
+  const n = Number(ts);
+  if (!isFinite(n) || n <= 0) return "-";
+  const d = new Date(n);
+  return isNaN(d.getTime()) ? "-" : d.toLocaleTimeString();
+}
+
 // ====== Sound ======
 function beep(times=1){
   if (!soundOn) return;
@@ -261,6 +268,8 @@ function renderCard(i){
       <div class="priceBox">
         <div class="big" id="price_${i}">현재가(Fair): -</div>
         <div class="muted" id="ma30_${i}">MA30: -</div>
+        <!-- ✅ 24h High/Low 다시 추가 -->
+        <div class="muted" id="hl24_${i}">24h High: - / 24h Low: -</div>
       </div>
       <div class="rsiBox">
         RSI(6): <span id="rsi6_${i}">-</span><br/>
@@ -388,6 +397,7 @@ async function refresh(){
       const card = document.getElementById(`card_${i}`);
       const priceEl = document.getElementById(`price_${i}`);
       const maEl = document.getElementById(`ma30_${i}`);
+      const hlEl = document.getElementById(`hl24_${i}`); // ✅ 24h
       const trendEl = document.getElementById(`trend_${i}`);
       const statusEl = document.getElementById(`status_${i}`);
       const recoEl = document.getElementById(`reco_${i}`);
@@ -406,17 +416,18 @@ async function refresh(){
         // 마지막 컨펌 방향은 status에서 결정되도록 아래에서 다시 세팅
       }
 
-      // ✅ (수정1) 에러 구간에서 lev/q.price_ts 참조 금지 + ind_ts 제거
       if(!q || q.error){
+        // ✅ 여기서 lev를 쓰면 undefined 터짐 방지: meta는 심볼만 표시
         priceEl.textContent = `현재가(Fair): -`;
         maEl.textContent = `MA30: -`;
+        if (hlEl) hlEl.textContent = `24h High: - / 24h Low: -`;
         trendEl.className = "pill neutral";
         trendEl.textContent = "트렌드: -";
         statusEl.className = "pill neutral";
         statusEl.textContent = "상태: -";
         recoEl.className = "pill warn";
         recoEl.textContent = `추천: 오류`;
-        metaEl.textContent = q?.error ? `에러: ${q.error}` : "데이터 없음";
+        metaEl.textContent = q?.error ? `에러: ${q.error}` : `심볼: ${symC} / 데이터 없음`;
 
         r6El.textContent = "ERR";
         r12El.textContent = "ERR";
@@ -438,6 +449,14 @@ async function refresh(){
 
       priceEl.textContent = `현재가(Fair): ${fmt(price,6)}`;
       maEl.textContent = `MA30: ${fmt(ma30,6)} (${tfMin}분)`;
+
+      // ✅ 24h High/Low 표시
+      if (hlEl) {
+        const h24 = (q.high24 === null || q.high24 === undefined) ? null : Number(q.high24);
+        const l24 = (q.low24 === null || q.low24 === undefined) ? null : Number(q.low24);
+        hlEl.textContent =
+          `24h High: ${isFinite(h24) ? fmt(h24, 6) : "-"} / 24h Low: ${isFinite(l24) ? fmt(l24, 6) : "-"}`;
+      }
 
       // RSI (겹침 방지: textContent로만 세팅)
       r6El.textContent = isFinite(q.rsi6) ? fmt(q.rsi6,2) : "-";
@@ -524,20 +543,17 @@ async function refresh(){
         pnl = size*frac;
         roi = (pnl/margin)*100;
       }
-
       const pnlEl = document.getElementById(`pnl_${i}`);
       pnlEl.textContent = pnl===null ? "-" : fmt(pnl,6);
 
-      // ✅ (수정2) className로 덮어쓰지 말고 classList로 (pnl 클래스 유지)
-      pnlEl.classList.remove("pnLPlus","pnLMinus");
-      if (pnl !== null) pnlEl.classList.add(pnl >= 0 ? "pnLPlus" : "pnLMinus");
+      // 기존 스타일 유지: plus/minus class를 그대로 쓰고 싶으면 css에 맞춰서 조정
+      pnlEl.className = (pnl!==null && pnl>=0) ? "pnLPlus" : "pnLMinus";
 
       document.getElementById(`roi_${i}`).textContent = roi===null ? "-" : fmt(roi,4);
 
-      // ✅ (수정3) ind_ts 제거 + price_ts 가드
-      const pts = q.price_ts ? new Date(q.price_ts).toLocaleTimeString() : "-";
+      // ✅ ind_ts Invalid Date 방지
       metaEl.textContent =
-        `심볼: ${symC} / 레버리지: ${lev}x / price_ts=${pts}`;
+        `심볼: ${symC} / 레버리지: ${lev}x / price_ts=${safeTime(q.price_ts)} / ind_ts=${safeTime(q.ind_ts)}`;
     }
   }catch(e){
     syncInfo.textContent = `갱신 오류: ${String(e?.message||e)}`;
